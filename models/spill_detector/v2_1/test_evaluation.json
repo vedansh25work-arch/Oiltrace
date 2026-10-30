@@ -1,0 +1,13 @@
+{
+  "checkpoint": "best_weights.pth",
+  "threshold": 0.2,
+  "images": 110,
+  "dice": 0.6905113967331548,
+  "iou": 0.5273137887649441,
+  "precision": 0.7364644296091521,
+  "recall": 0.6499562015378126,
+  "spill_only_mean_dice": 0.66273887275886,
+  "spill_images": 88,
+  "no_oil_images": 22,
+  "no_oil_false_positive_pixel_rate": 0.0008371526544744319
+}

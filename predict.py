@@ -1,662 +1,178 @@
-import os
-import sys
+from pathlib import Path
+
 import cv2
-import torch
 import numpy as np
+import torch
+import torch.nn.functional as F
 
 from unet import UNet
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
+ROOT = Path(__file__).resolve().parent
+MODEL_PATH = ROOT / "models/spill_detector/v2_1/best_weights.pth"
 
-# Stable model selected after final test evaluation
-MODEL_PATH = (
-    "ml/models/spill_detector/"
-    "best_unet_oil_spill_stable.pth"
+IMAGE_SIZE = (256, 512)
+THRESHOLD = 0.20
+OIL_COLOR = np.array([0, 255, 255], dtype=np.uint8)
+
+IMAGENET_MEAN = np.array(
+    [0.485, 0.456, 0.406], dtype=np.float32
 )
-
-# Input/output image size used during training
-IMAGE_SIZE = 256
-
-# Probability threshold
-THRESHOLD = 0.5
-
-# Minimum spill area required to say "spill detected"
-MIN_SPILL_AREA_PERCENTAGE = 0.5
-
-# Output directory
-OUTPUT_DIR = "ml/data/test"
-
-# Automatically use GPU if available
-DEVICE = torch.device(
-    "cuda" if torch.cuda.is_available() else "cpu"
+IMAGENET_STD = np.array(
+    [0.229, 0.224, 0.225], dtype=np.float32
 )
 
 
-# ============================================================
-# LOAD MODEL
-# ============================================================
+class SpillPredictor:
+    def __init__(
+        self,
+        model_path=MODEL_PATH,
+        image_size=IMAGE_SIZE,
+        threshold=THRESHOLD,
+    ):
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA unavailable. Use the project .venv.")
 
-def load_model():
+        self.image_size = image_size
+        self.threshold = threshold
+        self.device = "cuda"
 
-    print("\nLoading U-Net model...")
+        self.model = UNet().to(self.device)
 
-    if not os.path.exists(MODEL_PATH):
+        state = torch.load(
+            model_path,
+            map_location="cpu",
+            weights_only=True,
+        )
+        self.model.load_state_dict(state)
+        self.model.eval()
 
-        raise FileNotFoundError(
-            f"\nModel not found:\n"
-            f"{MODEL_PATH}\n\n"
-            "Make sure the stable model exists."
+    def preprocess(self, image):
+        height, width = self.image_size
+
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = cv2.resize(
+            image,
+            (width, height),
+            interpolation=cv2.INTER_AREA,
         )
 
-    model = UNet().to(DEVICE)
+        image = image.astype(np.float32) / 255.0
+        image = (image - IMAGENET_MEAN) / IMAGENET_STD
+        image = np.transpose(image, (2, 0, 1))
 
-    checkpoint = torch.load(
-        MODEL_PATH,
-        map_location=DEVICE
-    )
+        return torch.from_numpy(image).unsqueeze(0)
 
-    model.load_state_dict(checkpoint)
+    def predict(self, image):
+        original_height, original_width = image.shape[:2]
+        input_tensor = self.preprocess(image).to(self.device)
 
-    model.eval()
+        with torch.inference_mode():
+            logits = self.model(input_tensor)
+            probability = torch.sigmoid(logits)[0, 0].cpu().numpy()
 
-    print("Model loaded successfully.")
+        prediction = probability >= self.threshold
 
-    return model
-
-
-# ============================================================
-# PREPROCESS IMAGE
-# ============================================================
-
-def preprocess_image(image_path):
-
-    print("\nLoading input image...")
-
-    image = cv2.imread(
-        image_path,
-        cv2.IMREAD_COLOR
-    )
-
-    if image is None:
-
-        raise FileNotFoundError(
-            f"\nCould not load image:\n"
-            f"{image_path}"
+        mask = prediction.astype(np.uint8) * 255
+        mask = cv2.resize(
+            mask,
+            (original_width, original_height),
+            interpolation=cv2.INTER_NEAREST,
         )
 
-    print(
-        "Original image size:",
-        image.shape[1],
-        "x",
-        image.shape[0]
-    )
-
-    # Resize to model input size
-    image = cv2.resize(
-        image,
-        (IMAGE_SIZE, IMAGE_SIZE),
-        interpolation=cv2.INTER_AREA
-    )
-
-    # OpenCV uses BGR
-    # Model was trained using RGB
-    image = cv2.cvtColor(
-        image,
-        cv2.COLOR_BGR2RGB
-    )
-
-    # Convert uint8 [0,255]
-    # to float32 [0,1]
-    image = image.astype(
-        np.float32
-    ) / 255.0
-
-    # H,W,C → C,H,W
-    image = np.transpose(
-        image,
-        (2, 0, 1)
-    )
-
-    # NumPy → PyTorch
-    image = torch.tensor(
-        image,
-        dtype=torch.float32
-    )
-
-    # Add batch dimension
-    # C,H,W → 1,C,H,W
-    image = image.unsqueeze(0)
-
-    return image
-
-
-# ============================================================
-# PREDICTION
-# ============================================================
-
-def predict(model, image):
-
-    image = image.to(DEVICE)
-
-    with torch.no_grad():
-
-        # Raw U-Net output
-        output = model(image)
-
-        # Convert logits to probability
-        probability = torch.sigmoid(
-            output
+        probability_resized = cv2.resize(
+            probability,
+            (original_width, original_height),
+            interpolation=cv2.INTER_LINEAR,
         )
 
-        # Convert probability to binary mask
-        prediction = (
-            probability > THRESHOLD
-        ).float()
+        oil_pixels = int((mask > 0).sum())
+        total_pixels = mask.size
 
-    probability = (
-        probability
-        .squeeze()
-        .cpu()
-        .numpy()
-    )
+        return {
+            "mask": mask,
+            "probability": probability_resized,
+            "oil_pixel_count": oil_pixels,
+            "oil_pixel_fraction": oil_pixels / total_pixels,
+            "has_spill": oil_pixels > 0,
+        }
 
-    prediction = (
-        prediction
-        .squeeze()
-        .cpu()
-        .numpy()
-    )
+    def make_overlay(self, image, result, alpha=0.45):
+        overlay = image.copy()
 
-    return probability, prediction
+        mask = result["mask"] > 0
+        overlay[mask] = (
+            overlay[mask] * (1 - alpha)
+            + np.array([0, 255, 255]) * alpha
+        ).astype(np.uint8)
 
+        return overlay
 
-# ============================================================
-# CALCULATE SPILL INFORMATION
-# ============================================================
+    def make_probability_heatmap(self, result):
+        probability = result["probability"]
+        heatmap = (probability * 255).astype(np.uint8)
+        return cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
 
-def calculate_spill_information(
-    probability,
-    prediction
-):
-
-    total_pixels = prediction.size
-
-    spill_pixels = np.sum(
-        prediction > 0
-    )
-
-    spill_percentage = (
-        spill_pixels /
-        total_pixels
-    ) * 100
-
-    # Pixels classified as spill
-    spill_probabilities = (
-        probability[prediction > 0]
-    )
-
-    if len(spill_probabilities) > 0:
-
-        confidence = float(
-            np.mean(
-                spill_probabilities
-            )
-        )
-
-    else:
-
-        confidence = 0.0
-
-    spill_detected = (
-        spill_percentage
-        >= MIN_SPILL_AREA_PERCENTAGE
-    )
-
-    return {
-        "spill_detected": bool(
-            spill_detected
-        ),
-        "spill_area_percentage": round(
-            float(spill_percentage),
-            2
-        ),
-        "confidence": round(
-            confidence,
-            4
-        ),
-        "spill_pixels": int(
-            spill_pixels
-        ),
-        "total_pixels": int(
-            total_pixels
-        )
-    }
-
-
-# ============================================================
-# SAVE BINARY MASK
-# ============================================================
-
-def save_mask(
-    prediction,
-    output_path
-):
-
-    mask = (
-        prediction * 255
-    ).astype(
-        np.uint8
-    )
-
-    cv2.imwrite(
-        output_path,
-        mask
-    )
-
-    print(
-        "\nBinary spill mask saved to:"
-    )
-
-    print(
-        os.path.abspath(
-            output_path
-        )
-    )
-
-
-# ============================================================
-# SAVE PROBABILITY MAP
-# ============================================================
-
-def save_probability_map(
-    probability,
-    output_path
-):
-
-    probability_image = (
-        probability * 255
-    ).clip(
-        0,
-        255
-    ).astype(
-        np.uint8
-    )
-
-    cv2.imwrite(
-        output_path,
-        probability_image
-    )
-
-    print(
-        "\nProbability map saved to:"
-    )
-
-    print(
-        os.path.abspath(
-            output_path
-        )
-    )
-
-
-# ============================================================
-# SAVE OVERLAY
-# ============================================================
-
-def save_overlay(
-    image_path,
-    prediction,
-    output_path
-):
-
-    original = cv2.imread(
-        image_path,
-        cv2.IMREAD_COLOR
-    )
-
-    if original is None:
-
-        return
-
-    original = cv2.resize(
-        original,
-        (IMAGE_SIZE, IMAGE_SIZE),
-        interpolation=cv2.INTER_AREA
-    )
-
-    # Create mask
-    mask = (
-        prediction * 255
-    ).astype(
-        np.uint8
-    )
-
-    # Convert mask to BGR
-    mask_bgr = cv2.cvtColor(
-        mask,
-        cv2.COLOR_GRAY2BGR
-    )
-
-    # Highlight spill pixels
-    overlay = original.copy()
-
-    spill_region = (
-        prediction > 0
-    )
-
-    # Highlight detected regions
-    # using white in the overlay
-    overlay[spill_region] = (
-        255,
-        255,
-        255
-    )
-
-    # Blend original and detected region
-    result = cv2.addWeighted(
-        original,
-        0.70,
-        overlay,
-        0.30,
-        0
-    )
-
-    cv2.imwrite(
-        output_path,
-        result
-    )
-
-    print(
-        "\nOverlay saved to:"
-    )
-
-    print(
-        os.path.abspath(
-            output_path
-        )
-    )
-
-
-# ============================================================
-# PRINT RESULTS
-# ============================================================
-
-def print_results(
-    image_path,
-    information
-):
-
-    print("\n")
-    print("=" * 60)
-    print("OIL SPILL PREDICTION")
-    print("=" * 60)
-
-    print(
-        "\nInput image:"
-    )
-
-    print(
-        image_path
-    )
-
-    print(
-        "\nSpill detected:",
-        information[
-            "spill_detected"
-        ]
-    )
-
-    print(
-        "Spill area:",
-        information[
-            "spill_area_percentage"
-        ],
-        "%"
-    )
-
-    print(
-        "Spill pixels:",
-        information[
-            "spill_pixels"
-        ]
-    )
-
-    print(
-        "Total pixels:",
-        information[
-            "total_pixels"
-        ]
-    )
-
-    print(
-        "Model confidence:",
-        information[
-            "confidence"
-        ]
-    )
-
-    print(
-        "\nConfidence percentage:",
-        round(
-            information[
-                "confidence"
-            ] * 100,
-            2
-        ),
-        "%"
-    )
-
-    print("\n")
-    print("=" * 60)
-
-
-# ============================================================
-# MAIN
-# ============================================================
 
 def main():
+    import sys
 
-    print("=" * 60)
-    print("OIL SPILL SINGLE IMAGE PREDICTION")
-    print("=" * 60)
+    if len(sys.argv) != 2:
+        print("Usage:")
+        print("  .\\.venv\\Scripts\\python.exe -u predict.py <image_path>")
+        return
 
-    # --------------------------------------------------------
-    # Check command-line argument
-    # --------------------------------------------------------
+    image_path = Path(sys.argv[1])
 
-    if len(sys.argv) < 2:
+    if not image_path.is_file():
+        raise FileNotFoundError(image_path)
 
-        print(
-            "\nUsage:"
-        )
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
 
-        print(
-            "python ml\\src\\predict.py "
-            "<image_path>"
-        )
+    if image is None:
+        raise ValueError(f"Could not read image: {image_path}")
 
-        print(
-            "\nExample:"
-        )
+    predictor = SpillPredictor()
+    result = predictor.predict(image)
 
-        print(
-            "python ml\\src\\predict.py "
-            "ml\\data\\processed\\images\\test\\example.png"
-        )
+    output_dir = ROOT / "predictions"
+    output_dir.mkdir(exist_ok=True)
 
-        sys.exit(1)
+    stem = image_path.stem
 
-    image_path = sys.argv[1]
-
-    # --------------------------------------------------------
-    # Check input image
-    # --------------------------------------------------------
-
-    if not os.path.exists(image_path):
-
-        print(
-            f"\nInput image not found:\n"
-            f"{image_path}"
-        )
-
-        sys.exit(1)
-
-    # --------------------------------------------------------
-    # Show device
-    # --------------------------------------------------------
-
-    print(
-        "\nDevice:",
-        DEVICE
+    cv2.imwrite(
+        str(output_dir / f"{stem}_mask.png"),
+        result["mask"],
     )
-
-    if torch.cuda.is_available():
-
-        print(
-            "GPU:",
-            torch.cuda.get_device_name(0)
-        )
-
-    # --------------------------------------------------------
-    # Load model
-    # --------------------------------------------------------
-
-    model = load_model()
-
-    # --------------------------------------------------------
-    # Preprocess
-    # --------------------------------------------------------
-
-    image = preprocess_image(
-        image_path
+    cv2.imwrite(
+        str(output_dir / f"{stem}_overlay.jpg"),
+        predictor.make_overlay(image, result),
     )
-
-    # --------------------------------------------------------
-    # Predict
-    # --------------------------------------------------------
-
-    print(
-        "\nRunning prediction..."
-    )
-
-    probability, prediction = predict(
-        model,
-        image
+    cv2.imwrite(
+        str(output_dir / f"{stem}_probability.jpg"),
+        predictor.make_probability_heatmap(result),
     )
 
     print(
-        "Prediction completed."
-    )
-
-    # --------------------------------------------------------
-    # Calculate results
-    # --------------------------------------------------------
-
-    information = (
-        calculate_spill_information(
-            probability,
-            prediction
+        json.dumps(
+            {
+                "image": str(image_path),
+                "has_spill": result["has_spill"],
+                "oil_pixel_count": result["oil_pixel_count"],
+                "oil_pixel_fraction": result["oil_pixel_fraction"],
+                "threshold": predictor.threshold,
+                "outputs": [
+                    str(output_dir / f"{stem}_mask.png"),
+                    str(output_dir / f"{stem}_overlay.jpg"),
+                    str(output_dir / f"{stem}_probability.jpg"),
+                ],
+            },
+            indent=2,
         )
     )
 
-    # --------------------------------------------------------
-    # Print results
-    # --------------------------------------------------------
-
-    print_results(
-        image_path,
-        information
-    )
-
-    # --------------------------------------------------------
-    # Create output directory
-    # --------------------------------------------------------
-
-    os.makedirs(
-        OUTPUT_DIR,
-        exist_ok=True
-    )
-
-    # --------------------------------------------------------
-    # Output paths
-    # --------------------------------------------------------
-
-    mask_path = os.path.join(
-        OUTPUT_DIR,
-        "predicted_spill_mask.png"
-    )
-
-    probability_path = os.path.join(
-        OUTPUT_DIR,
-        "spill_probability_map.png"
-    )
-
-    overlay_path = os.path.join(
-        OUTPUT_DIR,
-        "spill_overlay.png"
-    )
-
-    # --------------------------------------------------------
-    # Save results
-    # --------------------------------------------------------
-
-    save_mask(
-        prediction,
-        mask_path
-    )
-
-    save_probability_map(
-        probability,
-        probability_path
-    )
-
-    save_overlay(
-        image_path,
-        prediction,
-        overlay_path
-    )
-
-    # --------------------------------------------------------
-    # Final message
-    # --------------------------------------------------------
-
-    print("\n")
-    print("=" * 60)
-    print("PREDICTION COMPLETE")
-    print("=" * 60)
-
-    print(
-        "\nThree files were created:"
-    )
-
-    print(
-        "\n1. predicted_spill_mask.png"
-    )
-
-    print(
-        "2. spill_probability_map.png"
-    )
-
-    print(
-        "3. spill_overlay.png"
-    )
-
-    print(
-        "\nOutput folder:"
-    )
-
-    print(
-        os.path.abspath(
-            OUTPUT_DIR
-        )
-    )
-
-
-# ============================================================
-# START PROGRAM
-# ============================================================
 
 if __name__ == "__main__":
+    import json
+
     main()

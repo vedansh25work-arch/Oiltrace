@@ -1,0 +1,81 @@
+{
+  "image": "C:\\Users\\veduo\\OneDrive\\Desktop\\c++\\Oiltrace\\data\\live\\inbox\\img_0004.jpg",
+  "has_spill": true,
+  "oil_pixel_count": 8167,
+  "oil_pixel_fraction": 0.010051692307692308,
+  "threshold": 0.2,
+  "model": "v2.1",
+  "regions": [
+    {
+      "region_id": 1,
+      "pixel_count": 7612,
+      "bbox": {
+        "x": 491,
+        "y": 150,
+        "width": 120,
+        "height": 170
+      },
+      "centroid": {
+        "x": 561.2410667367315,
+        "y": 230.53402522333158
+      },
+      "mean_probability": 0.9235281348228455,
+      "max_probability": 0.9999749064445496
+    },
+    {
+      "region_id": 3,
+      "pixel_count": 499,
+      "bbox": {
+        "x": 381,
+        "y": 323,
+        "width": 27,
+        "height": 25
+      },
+      "centroid": {
+        "x": 394.6933867735471,
+        "y": 335.7114228456914
+      },
+      "mean_probability": 0.8583011627197266,
+      "max_probability": 0.9999988079071045
+    },
+    {
+      "region_id": 2,
+      "pixel_count": 56,
+      "bbox": {
+        "x": 677,
+        "y": 211,
+        "width": 10,
+        "height": 8
+      },
+      "centroid": {
+        "x": 680.8035714285714,
+        "y": 214.23214285714286
+      },
+      "mean_probability": 0.2897997498512268,
+      "max_probability": 0.48391327261924744
+    }
+  ],
+  "alert": {
+    "alert_level": "high",
+    "reason": "3 candidate region(s); largest region has 7612 pixels and mean confidence 0.924.",
+    "largest_region": {
+      "region_id": 1,
+      "pixel_count": 7612,
+      "bbox": {
+        "x": 491,
+        "y": 150,
+        "width": 120,
+        "height": 170
+      },
+      "centroid": {
+        "x": 561.2410667367315,
+        "y": 230.53402522333158
+      },
+      "mean_probability": 0.9235281348228455,
+      "max_probability": 0.9999749064445496
+    },
+    "oil_pixel_fraction": 0.010051692307692308,
+    "threshold": 0.2
+  },
+  "processed_at": "2026-10-28 02:09:14"
+}

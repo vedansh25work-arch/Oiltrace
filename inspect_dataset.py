@@ -1,304 +1,176 @@
-import os
+from pathlib import Path
+from collections import Counter
+
 import cv2
 import numpy as np
 
 
-# ============================================================
-# DATASET PATHS
-# ============================================================
+ROOT = (
+    Path(__file__).resolve().parent
+    / "data"
+    / "raw"
+    / "kaggle_oil_spill"
+    / "oil-spill"
+)
 
-IMAGE_DIR = "ml/data/raw/images/train"
-MASK_DIR = "ml/data/raw/masks/train"
-
-
-# ============================================================
-# SETTINGS
-# ============================================================
-
-# These are valid pairs found by matching filenames.
-# We inspect a few different samples rather than only one.
-
-SAMPLE_FILES = [
-    "palsar_0.png",
-    "palsar_1.png",
-    "palsar_100.png",
-    "palsar_1000.png",
-]
+SUPPORTED_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"
+}
 
 
-# ============================================================
-# HELPER
-# ============================================================
+def collect_files(folder):
+    if not folder.is_dir():
+        raise FileNotFoundError(f"Directory not found: {folder}")
 
-def inspect_file(image_path, mask_path):
-
-    print("\n" + "-" * 70)
-
-    print("Image:")
-    print(image_path)
-
-    print("Mask:")
-    print(mask_path)
-
-    # --------------------------------------------------------
-    # Read image
-    # --------------------------------------------------------
-
-    image = cv2.imread(
-        image_path,
-        cv2.IMREAD_UNCHANGED
+    files = sorted(
+        path for path in folder.iterdir()
+        if path.is_file()
+        and path.suffix.lower() in SUPPORTED_EXTENSIONS
     )
+
+    by_stem = {}
+
+    for path in files:
+        if path.stem in by_stem:
+            raise ValueError(
+                f"Duplicate filename stem: {path.stem}\n"
+                f"{by_stem[path.stem]}\n{path}"
+            )
+        by_stem[path.stem] = path
+
+    return files, by_stem
+
+
+def inspect_pair(image_path, mask_path):
+    print("\n" + "-" * 65)
+    print("Image:", image_path.name)
+    print("Label:", mask_path.name)
+
+    image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+    mask = cv2.imread(str(mask_path), cv2.IMREAD_UNCHANGED)
 
     if image is None:
-        print("ERROR: Could not read image.")
-        return
-
-    # --------------------------------------------------------
-    # Read mask
-    # --------------------------------------------------------
-
-    mask = cv2.imread(
-        mask_path,
-        cv2.IMREAD_UNCHANGED
-    )
+        raise ValueError(f"Could not read image: {image_path}")
 
     if mask is None:
-        print("ERROR: Could not read mask.")
-        return
-
-    # --------------------------------------------------------
-    # Image information
-    # --------------------------------------------------------
-
-    print("\nIMAGE INFORMATION")
-
-    print("Shape:", image.shape)
-    print("Dimensions:", image.shape[:2])
-
-    if len(image.shape) == 2:
-        print("Channels: 1 (grayscale)")
-    else:
-        print("Channels:", image.shape[2])
-
-    print("Data type:", image.dtype)
-
-    print("Minimum value:", image.min())
-    print("Maximum value:", image.max())
+        raise ValueError(f"Could not read label: {mask_path}")
 
     print(
-        "Mean:",
-        round(float(image.mean()), 4)
+        "Image:",
+        f"shape={image.shape}, dtype={image.dtype},",
+        f"min={image.min()}, max={image.max()}"
     )
 
     print(
-        "Standard deviation:",
-        round(float(image.std()), 4)
+        "Label:",
+        f"shape={mask.shape}, dtype={mask.dtype},",
+        f"min={mask.min()}, max={mask.max()}"
     )
 
-    # --------------------------------------------------------
-    # Mask information
-    # --------------------------------------------------------
+    print(
+        "Image/label dimensions match:",
+        image.shape[:2] == mask.shape[:2]
+    )
 
-    print("\nMASK INFORMATION")
+    if mask.ndim == 2:
+        values, counts = np.unique(mask, return_counts=True)
 
-    print("Shape:", mask.shape)
-    print("Dimensions:", mask.shape[:2])
+        print("Number of unique label values:", len(values))
+        print("Label value -> pixel count:")
 
-    if len(mask.shape) == 2:
-        print("Channels: 1 (grayscale)")
-    else:
-        print("Channels:", mask.shape[2])
-
-    print("Data type:", mask.dtype)
-
-    print("Minimum value:", mask.min())
-    print("Maximum value:", mask.max())
-
-    # --------------------------------------------------------
-    # Unique mask values
-    # --------------------------------------------------------
-
-    unique_values = np.unique(mask)
-
-    print("\nUnique mask values:")
-
-    if len(unique_values) <= 20:
-
-        print(unique_values)
+        for value, count in zip(values[:30], counts[:30]):
+            percentage = 100 * int(count) / mask.size
+            print(
+                f"  {value}: {int(count)} pixels "
+                f"({percentage:.2f}%)"
+            )
 
     else:
+        if mask.shape[2] == 3:
+            colors_image = cv2.cvtColor(mask, cv2.COLOR_BGR2RGB)
+            color_order = "RGB"
+        elif mask.shape[2] == 4:
+            colors_image = cv2.cvtColor(mask, cv2.COLOR_BGRA2RGBA)
+            color_order = "RGBA"
+        else:
+            colors_image = mask
+            color_order = "original channel order"
+
+        pixels = colors_image.reshape(-1, colors_image.shape[2])
+        colors, counts = np.unique(
+            pixels, axis=0, return_counts=True
+        )
+
+        order = np.argsort(counts)[::-1][:15]
+
+        print(f"Number of unique {color_order} colors:", len(colors))
+        print(f"Most common colors ({color_order}) -> pixel count:")
+
+        for index in order:
+            percentage = 100 * int(counts[index]) / len(pixels)
+            print(
+                f"  {colors[index].tolist()}: "
+                f"{int(counts[index])} pixels "
+                f"({percentage:.2f}%)"
+            )
+
+
+def main():
+    print("DATASET INSPECTION")
+    print("Dataset root:", ROOT)
+
+    for split in ("train", "test"):
+        print("\n" + "=" * 65)
+        print(split.upper())
+        print("=" * 65)
+
+        image_files, images = collect_files(ROOT / split / "images")
+        mask_files, masks = collect_files(ROOT / split / "labels")
+
+        print("Images:", len(image_files))
+        print("Labels:", len(mask_files))
 
         print(
-            "More than 20 unique values found."
+            "Image extensions:",
+            dict(Counter(p.suffix.lower() for p in image_files))
         )
-
         print(
-            "First 20:",
-            unique_values[:20]
+            "Label extensions:",
+            dict(Counter(p.suffix.lower() for p in mask_files))
         )
 
-    # --------------------------------------------------------
-    # Mask pixel statistics
-    # --------------------------------------------------------
+        print("Example image names:", [p.name for p in image_files[:3]])
+        print("Example label names:", [p.name for p in mask_files[:3]])
 
-    total_pixels = mask.size
+        matching = sorted(images.keys() & masks.keys())
 
-    non_zero_pixels = np.count_nonzero(mask)
-
-    zero_pixels = total_pixels - non_zero_pixels
-
-    print("\nMASK PIXEL STATISTICS")
-
-    print("Total pixels:", total_pixels)
-
-    print("Background pixels:", zero_pixels)
-
-    print("Non-zero pixels:", non_zero_pixels)
-
-    if total_pixels > 0:
-
-        percentage = (
-            non_zero_pixels
-            / total_pixels
-            * 100
-        )
-
+        print("Matching filename stems:", len(matching))
         print(
-            "Non-zero percentage:",
-            round(percentage, 2),
-            "%"
+            "Images without same-stem labels:",
+            sorted(images.keys() - masks.keys())[:10]
+        )
+        print(
+            "Labels without same-stem images:",
+            sorted(masks.keys() - images.keys())[:10]
         )
 
+        if not matching:
+            print("No same-stem pairs found; inspect naming before proceeding.")
+            continue
 
-# ============================================================
-# MAIN
-# ============================================================
+        sample_indices = np.linspace(
+            0,
+            len(matching) - 1,
+            num=min(4, len(matching)),
+            dtype=int,
+        )
 
-print("=" * 70)
-print("OIL SPILL DATASET INSPECTION")
-print("=" * 70)
+        for index in sample_indices:
+            stem = matching[int(index)]
+            inspect_pair(images[stem], masks[stem])
 
-print("\nImage directory:")
-print(IMAGE_DIR)
-
-print("\nMask directory:")
-print(MASK_DIR)
-
-
-# ============================================================
-# CHECK DIRECTORIES
-# ============================================================
-
-if not os.path.exists(IMAGE_DIR):
-
-    raise FileNotFoundError(
-        f"\nImage directory not found:\n{IMAGE_DIR}"
-    )
+    print("\nInspection finished. No dataset files were modified.")
 
 
-if not os.path.exists(MASK_DIR):
-
-    raise FileNotFoundError(
-        f"\nMask directory not found:\n{MASK_DIR}"
-    )
-
-
-# ============================================================
-# GET VALID FILES
-# ============================================================
-
-image_files = {
-    filename
-    for filename in os.listdir(IMAGE_DIR)
-    if filename.lower().endswith(".png")
-}
-
-mask_files = {
-    filename
-    for filename in os.listdir(MASK_DIR)
-    if filename.lower().endswith(".png")
-}
-
-
-valid_files = sorted(
-    image_files & mask_files
-)
-
-
-print("\nTotal images:", len(image_files))
-print("Total masks:", len(mask_files))
-print("Valid pairs:", len(valid_files))
-
-
-# ============================================================
-# SELECT SAMPLES
-# ============================================================
-
-print("\n" + "=" * 70)
-print("INSPECTING SAMPLE FILES")
-print("=" * 70)
-
-
-samples_to_inspect = []
-
-for filename in SAMPLE_FILES:
-
-    if filename in valid_files:
-
-        samples_to_inspect.append(filename)
-
-
-# If one of the predefined samples doesn't exist,
-# automatically select files from the dataset.
-
-if len(samples_to_inspect) < 4:
-
-    for filename in valid_files:
-
-        if filename not in samples_to_inspect:
-
-            samples_to_inspect.append(filename)
-
-        if len(samples_to_inspect) >= 4:
-
-            break
-
-
-# ============================================================
-# INSPECT
-# ============================================================
-
-for filename in samples_to_inspect:
-
-    image_path = os.path.join(
-        IMAGE_DIR,
-        filename
-    )
-
-    mask_path = os.path.join(
-        MASK_DIR,
-        filename
-    )
-
-    inspect_file(
-        image_path,
-        mask_path
-    )
-
-
-# ============================================================
-# FINAL SUMMARY
-# ============================================================
-
-print("\n" + "=" * 70)
-print("INSPECTION COMPLETE")
-print("=" * 70)
-
-print("\nSamples inspected:", len(samples_to_inspect))
-
-print("\nDataset is ready for the next analysis step.")
-
-print(
-    "\nNext step will be to configure the U-Net input "
-    "according to the actual image channels and dimensions."
-)
+if __name__ == "__main__":
+    main()

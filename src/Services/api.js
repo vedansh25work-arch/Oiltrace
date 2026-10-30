@@ -1,7 +1,9 @@
 import axios from "axios";
 
+
 const API_BASE_URL =
   import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -11,18 +13,22 @@ const api = axios.create({
   },
 });
 
+
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem("oceanwatch_token");
+
 
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
 
+
     return config;
   },
   (error) => Promise.reject(error)
 );
+
 
 api.interceptors.response.use(
   (response) => response,
@@ -32,36 +38,44 @@ api.interceptors.response.use(
       localStorage.removeItem("isLoggedIn");
     }
 
+
     return Promise.reject(error);
   }
 );
 
+
 // --------------------------------------------------
 // Health
 // --------------------------------------------------
+
 
 export const checkServerHealth = async () => {
   const response = await api.get("/");
   return response.data;
 };
 
+
 // --------------------------------------------------
 // Authentication
 // --------------------------------------------------
+
 
 export const loginUser = async (credentials) => {
   const response = await api.post("/login", credentials);
   return response.data;
 };
 
+
 // --------------------------------------------------
 // Incident APIs
 // --------------------------------------------------
+
 
 export const getIncident = async (incidentId = 1) => {
   const response = await api.get(`/incidents/${incidentId}`);
   return response.data;
 };
+
 
 export const getIncidentCandidates = async (incidentId = 1) => {
   const response = await api.get(
@@ -70,12 +84,14 @@ export const getIncidentCandidates = async (incidentId = 1) => {
   return response.data;
 };
 
+
 export const getIncidentEvidence = async (incidentId = 1) => {
   const response = await api.get(
     `/incidents/${incidentId}/evidence`
   );
   return response.data;
 };
+
 
 export const getIncidentInvestigation = async (
   incidentId = 1
@@ -86,9 +102,11 @@ export const getIncidentInvestigation = async (
   return response.data;
 };
 
+
 // --------------------------------------------------
 // Vessel APIs
 // --------------------------------------------------
+
 
 export const getVesselBehaviour = async (mmsi) => {
   const response = await api.get(
@@ -97,17 +115,21 @@ export const getVesselBehaviour = async (mmsi) => {
   return response.data;
 };
 
+
 export const searchVessels = async (params = {}) => {
   const response = await api.get("/vessels", {
     params,
   });
 
+
   return response.data;
 };
+
 
 // --------------------------------------------------
 // Existing compatibility APIs
 // --------------------------------------------------
+
 
 export const detectSpill = async (formData) => {
   const response = await api.post(
@@ -120,8 +142,10 @@ export const detectSpill = async (formData) => {
     }
   );
 
+
   return response.data;
 };
+
 
 export const analyzeSpill = async (payload) => {
   const response = await api.post(
@@ -129,8 +153,10 @@ export const analyzeSpill = async (payload) => {
     payload
   );
 
+
   return response.data;
 };
+
 
 export const predictDrift = async (payload) => {
   const response = await api.post(
@@ -138,8 +164,10 @@ export const predictDrift = async (payload) => {
     payload
   );
 
+
   return response.data;
 };
+
 
 export const attributeVessels = async (payload) => {
   const response = await api.post(
@@ -147,12 +175,53 @@ export const attributeVessels = async (payload) => {
     payload
   );
 
+
   return response.data;
 };
+
+
+// --------------------------------------------------
+// Oiltrace live detection APIs
+// --------------------------------------------------
+
+
+export const predictSpill = async (file) => {
+  const formData = new FormData();
+  formData.append("file", file);
+
+
+  const response = await api.post("/predict", formData, {
+    headers: {
+      "Content-Type": "multipart/form-data",
+    },
+    timeout: 60000,
+  });
+
+
+  return response.data;
+};
+
+
+export const getLiveResults = async (limit = 20) => {
+  const response = await api.get("/live/results", {
+    params: { limit },
+  });
+
+
+  return response.data;
+};
+
+
+export const getLatestLiveResult = async () => {
+  const response = await getLiveResults(1);
+  return response.results?.[0] ?? null;
+};
+
 
 // --------------------------------------------------
 // Reports
 // --------------------------------------------------
+
 
 export const generateReport = async (payload) => {
   const response = await api.post(
@@ -160,27 +229,33 @@ export const generateReport = async (payload) => {
     payload
   );
 
+
   return response.data;
 };
+
 
 export const getRemoteReports = async () => {
   const response = await api.get("/reports");
   return response.data;
 };
 
+
 export const getRemoteReportById = async (id) => {
   const response = await api.get(`/reports/${id}`);
   return response.data;
 };
 
+
 // --------------------------------------------------
 // Generic API helpers
 // --------------------------------------------------
+
 
 export const getRequest = async (url, config = {}) => {
   const response = await api.get(url, config);
   return response.data;
 };
+
 
 export const postRequest = async (
   url,
@@ -193,8 +268,10 @@ export const postRequest = async (
     config
   );
 
+
   return response.data;
 };
+
 
 export const putRequest = async (
   url,
@@ -207,8 +284,10 @@ export const putRequest = async (
     config
   );
 
+
   return response.data;
 };
+
 
 export const deleteRequest = async (
   url,
@@ -219,7 +298,9 @@ export const deleteRequest = async (
     config
   );
 
+
   return response.data;
 };
+
 
 export default api;

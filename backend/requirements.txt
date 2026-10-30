@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+requests
+numpy
+opencv-python
+torch
+pillow
+shapely
+python-dotenv

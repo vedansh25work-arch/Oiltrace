@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Upload,
   Image as ImageIcon,
@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
+
 export default function UploadBox({
   onFilesSelected,
   multiple = true,
@@ -18,59 +19,114 @@ export default function UploadBox({
 }) {
   const inputRef = useRef(null);
   const [files, setFiles] = useState([]);
+  const [previews, setPreviews] = useState({});
   const [dragActive, setDragActive] = useState(false);
+
+
+  useEffect(() => {
+    return () => {
+      Object.values(previews).forEach((url) => {
+        URL.revokeObjectURL(url);
+      });
+    };
+  }, [previews]);
+
+
+  const createPreview = (file) => {
+    if (previews[file.name]) {
+      return previews[file.name];
+    }
+
+
+    const url = URL.createObjectURL(file);
+    setPreviews((current) => ({
+      ...current,
+      [file.name]: url,
+    }));
+
+
+    return url;
+  };
+
 
   const processFiles = (selectedFiles) => {
     const imageFiles = Array.from(selectedFiles).filter(
-      (file) =>
-        file.type.startsWith("image/")
+      (file) => file.type.startsWith("image/")
     );
 
-    const limitedFiles = imageFiles.slice(
-      0,
-      maxFiles
-    );
+
+    const limitedFiles = imageFiles.slice(0, maxFiles);
+
 
     setFiles(limitedFiles);
+
+
+    limitedFiles.forEach((file) => {
+      createPreview(file);
+    });
+
 
     if (onFilesSelected) {
       onFilesSelected(limitedFiles);
     }
   };
 
+
   const handleInputChange = (event) => {
     processFiles(event.target.files);
   };
 
+
   const handleDrop = (event) => {
     event.preventDefault();
     setDragActive(false);
+
 
     if (event.dataTransfer.files) {
       processFiles(event.dataTransfer.files);
     }
   };
 
+
   const removeFile = (index) => {
+    const removedFile = files[index];
     const updated = files.filter(
       (_, fileIndex) => fileIndex !== index
     );
 
+
+    if (removedFile && previews[removedFile.name]) {
+      URL.revokeObjectURL(previews[removedFile.name]);
+
+
+      setPreviews((current) => {
+        const next = { ...current };
+        delete next[removedFile.name];
+        return next;
+      });
+    }
+
+
     setFiles(updated);
+
 
     if (onFilesSelected) {
       onFilesSelected(updated);
     }
   };
 
+
   const openFilePicker = () => {
     inputRef.current?.click();
   };
 
+
   return (
     <div className="w-full">
 
+
       {/* Hidden input */}
+
 
       <input
         ref={inputRef}
@@ -81,9 +137,11 @@ export default function UploadBox({
         className="hidden"
       />
 
+
       {/* =====================================================
           EMPTY STATE
       ====================================================== */}
+
 
       {files.length === 0 && (
         <motion.div
@@ -106,11 +164,15 @@ export default function UploadBox({
           }`}
         >
 
+
           {/* Glow */}
+
 
           <div className="pointer-events-none absolute left-1/2 top-1/2 h-40 w-40 -translate-x-1/2 -translate-y-1/2 rounded-full bg-cyan-400/5 blur-3xl" />
 
+
           {/* Icon */}
+
 
           <motion.div
             animate={{
@@ -130,9 +192,11 @@ export default function UploadBox({
             )}
           </motion.div>
 
+
           <h3 className="relative mt-5 text-sm font-semibold text-white">
             Upload Satellite Imagery
           </h3>
+
 
           <p className="relative mx-auto mt-2 max-w-md text-xs leading-relaxed text-slate-500">
             Drag and drop satellite images here, or
@@ -140,9 +204,12 @@ export default function UploadBox({
             analysis.
           </p>
 
+
           {/* Buttons */}
 
+
           <div className="relative mt-6 flex flex-wrap items-center justify-center gap-2">
+
 
             <button
               type="button"
@@ -152,6 +219,7 @@ export default function UploadBox({
               <Upload size={14} />
               Choose Images
             </button>
+
 
             <button
               type="button"
@@ -163,7 +231,9 @@ export default function UploadBox({
             </button>
           </div>
 
+
           {/* Formats */}
+
 
           <div className="relative mt-6 flex flex-wrap items-center justify-center gap-2">
             {["JPG", "JPEG", "PNG", "WEBP"].map(
@@ -177,9 +247,11 @@ export default function UploadBox({
               )
             )}
 
+
             <span className="text-[8px] text-slate-700">
               •
             </span>
+
 
             <span className="text-[8px] text-slate-600">
               Max {maxFiles} images
@@ -188,16 +260,21 @@ export default function UploadBox({
         </motion.div>
       )}
 
+
       {/* =====================================================
           FILE PREVIEW
       ====================================================== */}
 
+
       {files.length > 0 && (
         <div className="rounded-3xl border border-slate-800/80 bg-[#07131f]/70 p-4">
 
+
           {/* Header */}
 
+
           <div className="mb-4 flex items-center justify-between">
+
 
             <div>
               <div className="flex items-center gap-2">
@@ -206,16 +283,19 @@ export default function UploadBox({
                   className="text-emerald-400"
                 />
 
+
                 <h3 className="text-xs font-semibold text-white">
                   Imagery Ready
                 </h3>
               </div>
+
 
               <p className="mt-1 text-[9px] text-slate-600">
                 {files.length} image
                 {files.length > 1 ? "s" : ""} selected
               </p>
             </div>
+
 
             <button
               type="button"
@@ -227,9 +307,12 @@ export default function UploadBox({
             </button>
           </div>
 
+
           {/* Preview grid */}
 
+
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+
 
             <AnimatePresence>
               {files.map((file, index) => (
@@ -250,16 +333,20 @@ export default function UploadBox({
                   className="group relative overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50"
                 >
                   <img
-                    src={URL.createObjectURL(file)}
+                    src={previews[file.name]}
                     alt={file.name}
                     className="aspect-square w-full object-cover opacity-75 transition group-hover:scale-105 group-hover:opacity-100"
                   />
 
+
                   {/* Overlay */}
+
 
                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
 
+
                   {/* Remove */}
+
 
                   <button
                     type="button"
@@ -271,7 +358,9 @@ export default function UploadBox({
                     <X size={12} />
                   </button>
 
+
                   {/* File info */}
+
 
                   <div className="absolute bottom-0 left-0 right-0 p-2">
                     <div className="flex items-center gap-1.5">
@@ -280,10 +369,12 @@ export default function UploadBox({
                         className="text-cyan-400"
                       />
 
+
                       <p className="truncate text-[8px] font-medium text-white">
                         {file.name}
                       </p>
                     </div>
+
 
                     <p className="mt-1 text-[7px] text-slate-500">
                       {(file.size / 1024 / 1024).toFixed(2)} MB

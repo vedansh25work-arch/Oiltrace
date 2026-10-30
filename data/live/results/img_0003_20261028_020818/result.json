@@ -1,0 +1,49 @@
+{
+  "image": "C:\\Users\\veduo\\OneDrive\\Desktop\\c++\\Oiltrace\\data\\live\\inbox\\img_0003.jpg",
+  "has_spill": true,
+  "oil_pixel_count": 11622,
+  "oil_pixel_fraction": 0.014304,
+  "threshold": 0.2,
+  "model": "v2.1",
+  "regions": [
+    {
+      "region_id": 1,
+      "pixel_count": 11622,
+      "bbox": {
+        "x": 1097,
+        "y": 473,
+        "width": 129,
+        "height": 144
+      },
+      "centroid": {
+        "x": 1161.0813973498537,
+        "y": 545.3762691447255
+      },
+      "mean_probability": 0.8290931582450867,
+      "max_probability": 0.9862716794013977
+    }
+  ],
+  "alert": {
+    "alert_level": "high",
+    "reason": "1 candidate region(s); largest region has 11622 pixels and mean confidence 0.829.",
+    "largest_region": {
+      "region_id": 1,
+      "pixel_count": 11622,
+      "bbox": {
+        "x": 1097,
+        "y": 473,
+        "width": 129,
+        "height": 144
+      },
+      "centroid": {
+        "x": 1161.0813973498537,
+        "y": 545.3762691447255
+      },
+      "mean_probability": 0.8290931582450867,
+      "max_probability": 0.9862716794013977
+    },
+    "oil_pixel_fraction": 0.014304,
+    "threshold": 0.2
+  },
+  "processed_at": "2026-10-28 02:08:18"
+}

@@ -1,0 +1,14 @@
+{
+  "image": "C:\\Users\\veduo\\OneDrive\\Desktop\\c++\\Oiltrace\\data\\live\\inbox\\img_0005.jpg",
+  "has_spill": false,
+  "oil_pixel_count": 0,
+  "oil_pixel_fraction": 0.0,
+  "threshold": 0.2,
+  "model": "v2.1",
+  "regions": [],
+  "alert": {
+    "alert_level": "none",
+    "reason": "No sufficiently large oil-like region detected."
+  },
+  "processed_at": "2026-10-28 02:09:14"
+}

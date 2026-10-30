@@ -1,738 +1,399 @@
-import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Satellite,
-  MapPin,
   Target,
-  Maximize2,
-  Waves,
+  Layers,
+  ScanLine,
   AlertTriangle,
   CheckCircle2,
   ArrowRight,
-  RotateCcw,
-  Navigation,
-  Clock3,
-  Activity,
-  ShieldCheck,
-  Crosshair,
+  MapPin,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
-import { getIncident } from "../Services/api";
 
-const FALLBACK_ANALYSIS = {
-  id: "N/A",
-  location: "Unavailable",
-  coordinates: "Unavailable",
-  area: "Unavailable",
-  confidence: 0,
-  severity: "LOW",
-  age: "Unavailable",
-  shape: "Unavailable",
-  perimeter: "Unavailable",
-  detectedAt: "Unavailable",
-};
 
-function buildAnalysisData(incident, customInspection = null) {
-  if (!incident && !customInspection) {
-    return FALLBACK_ANALYSIS;
+function readInspection() {
+  try {
+    const stored = localStorage.getItem(
+      "oiltrace_latest_analysis"
+    );
+
+    return stored ? JSON.parse(stored) : null;
+  } catch {
+    return null;
   }
-
-  const customAnalysis = customInspection?.analysis;
-
-  const customLocation =
-    customInspection?.location &&
-    customInspection.location !== "Auto-detected region"
-      ? customInspection.location
-      : customAnalysis?.sensorType
-        ? `${customAnalysis.sensorType} Zone`
-        : null;
-
-  const latitude =
-    customAnalysis?.latitude ??
-    incident?.latitude ??
-    incident?.lat ??
-    incident?.location?.latitude ??
-    (customInspection ? 25.1248 : null);
-
-  const longitude =
-    customAnalysis?.longitude ??
-    incident?.longitude ??
-    incident?.lon ??
-    incident?.location?.longitude ??
-    (customInspection ? 54.3821 : null);
-
-  const confidence = Number(
-    customAnalysis?.confidence ??
-      incident?.detection_confidence ??
-      incident?.confidence ??
-      (customInspection ? 88.4 : 0)
-  );
-
-  const area =
-    customAnalysis?.estimatedAreaKm2 ??
-    incident?.estimated_area_km2 ??
-    incident?.spill_area ??
-    incident?.area ??
-    (customInspection ? 3.45 : null);
-
-  const severity =
-    customAnalysis?.severity ??
-    incident?.severity ??
-    incident?.priority_level ??
-    (confidence >= 80
-      ? "HIGH"
-      : confidence >= 60
-        ? "MEDIUM"
-        : "LOW");
-
-  const location =
-    customLocation ??
-    incident?.location_name ??
-    incident?.region ??
-    (latitude != null && longitude != null
-      ? (customInspection ? "Maritime Observation Zone" : "Gulf of Mexico / Coast")
-      : "Unavailable");
-
-  const rawDetectedAt =
-    incident?.detection_time ??
-    incident?.detected_at ??
-    incident?.timestamp ??
-    customInspection?.createdAt ??
-    null;
-
-  const detectedAt = rawDetectedAt
-    ? new Date(rawDetectedAt).toLocaleString("en-IN", {
-        dateStyle: "medium",
-        timeStyle: "short",
-      })
-    : "Unavailable";
-
-  const latNum = latitude != null ? Number(latitude) : null;
-  const lonNum = longitude != null ? Number(longitude) : null;
-  const coordinates =
-    latNum != null && lonNum != null
-      ? `${Math.abs(latNum).toFixed(4)}° ${latNum >= 0 ? "N" : "S"}, ${Math.abs(lonNum).toFixed(4)}° ${lonNum >= 0 ? "E" : "W"}`
-      : "Unavailable";
-
-  return {
-    id:
-      customInspection?.id ??
-      (incident?.incident_id != null
-        ? `INCIDENT-${incident.incident_id}`
-        : "N/A"),
-
-    location,
-    coordinates,
-
-    area:
-      area != null
-        ? `${Number(area).toFixed(2)} km²`
-        : "Unavailable",
-
-    confidence: Number(confidence.toFixed(2)),
-
-    severity: String(severity).toUpperCase(),
-
-    age:
-      incident?.estimated_age ??
-      incident?.age ??
-      (customInspection ? "Recent (< 3h)" : "Unavailable"),
-
-    shape:
-      customAnalysis?.shape ??
-      incident?.shape ??
-      incident?.morphology ??
-      (customInspection ? "Linear plume / Sheen" : "Unavailable"),
-
-    perimeter:
-      customAnalysis?.perimeterKm != null
-        ? `${Number(customAnalysis.perimeterKm).toFixed(2)} km`
-        : incident?.perimeter_km != null
-          ? `${Number(incident.perimeter_km).toFixed(2)} km`
-          : incident?.perimeter ?? (customInspection ? "8.72 km" : "Unavailable"),
-
-    detectedAt,
-    analysis: customAnalysis,
-  };
 }
 
-function Metric({ icon: Icon, label, value, sub }) {
+
+function probabilityPercent(value) {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value > 1
+  ) {
+    return "Unavailable";
+  }
+
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+
+function Metric({ icon: Icon, label, value, description }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-      <div className="flex items-center justify-between">
-        <div className="rounded-xl bg-cyan-400/10 p-2 text-cyan-400">
-          <Icon size={17} />
-        </div>
+    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+      <div className="inline-flex rounded-xl bg-cyan-400/10 p-2 text-cyan-300">
+        <Icon size={19} />
       </div>
 
-      <p className="mt-4 text-[10px] uppercase tracking-wider text-slate-600">
+      <p className="mt-4 text-xs uppercase tracking-wider text-slate-500">
         {label}
       </p>
 
-      <p className="mt-1 text-xl font-bold text-slate-100">
+      <p className="mt-2 break-words text-2xl font-bold text-white">
         {value}
       </p>
 
-      {sub && (
-        <p className="mt-1 text-[10px] text-slate-600">
-          {sub}
-        </p>
-      )}
+      <p className="mt-2 text-xs leading-5 text-slate-500">
+        {description}
+      </p>
     </div>
   );
 }
 
+
 export default function SpillAnalysis() {
   const navigate = useNavigate();
+  const [inspection] = useState(readInspection);
+  const [activeView, setActiveView] = useState("overlay");
 
-  const [incident, setIncident] = useState(null);
-  const [customInspection] = useState(() => {
-    try {
-      const stored = localStorage.getItem("oiltrace_latest_analysis");
-      return stored ? JSON.parse(stored) : null;
-    } catch {
-      return null;
-    }
-  });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const analysis = inspection?.analysis ?? null;
 
-  const [progress, setProgress] = useState(0);
-  const processing = progress < 100;
+  const regionsAvailable = Array.isArray(analysis?.regions);
+  const regions = regionsAvailable ? analysis.regions : [];
 
-  const analysisData = buildAnalysisData(incident, customInspection);
+  const hasSpill = analysis?.spillDetected === true;
 
-  useEffect(() => {
-    let cancelled = false;
+  const largestRegion = regions.reduce(
+    (largest, region) =>
+      !largest ||
+      Number(region.pixel_count) > Number(largest.pixel_count)
+        ? region
+        : largest,
+    null
+  );
 
-    async function fetchIncidentData() {
-      try {
-        const data = await getIncident(1);
+  const confidence = probabilityPercent(
+    largestRegion?.mean_probability
+  );
 
-        if (cancelled) {
-          return;
-        }
+  const coverage =
+    typeof analysis?.spillAreaPct === "number" &&
+    Number.isFinite(analysis.spillAreaPct)
+      ? `${analysis.spillAreaPct.toFixed(3)}%`
+      : "Unavailable";
 
-        setIncident(data);
-        setError("");
-        setLoading(false);
-      } catch (err) {
-        if (cancelled) {
-          return;
-        }
+  // Use the backend alert, not the old UI's default LOW severity.
+  const alertLevel =
+    typeof analysis?.alert?.alert_level === "string"
+      ? analysis.alert.alert_level.toUpperCase()
+      : "UNAVAILABLE";
 
-        console.error(
-          "Oiltrace incident API failed:",
-          err
-        );
+  const alertReason =
+    analysis?.alert?.reason ||
+    "Alert metadata was not included in this saved result.";
 
-        if (!customInspection) {
-          setError(
-            "Live incident data could not be loaded."
-          );
-        }
-
-        setLoading(false);
-      }
-    }
-
-    void fetchIncidentData();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [customInspection]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const timer = setInterval(() => {
-      if (cancelled) {
-        return;
-      }
-
-      setProgress((previous) => {
-        if (previous >= 100) {
-          return 100;
-        }
-
-        return Math.min(previous + 5, 100);
-      });
-    }, 70);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
-
-  const rerunAnalysis = async () => {
-    setProgress(0);
-
-    try {
-      const data = await getIncident(1);
-
-      setIncident(data);
-      setError("");
-    } catch (err) {
-      console.error(
-        "Oiltrace re-run analysis failed:",
-        err
-      );
-
-      setError(
-        "Unable to refresh live incident data."
-      );
-    }
+  const images = {
+    original: inspection?.imageDataUrl || null,
+    overlay: analysis?.overlayJpgBase64
+      ? `data:image/jpeg;base64,${analysis.overlayJpgBase64}`
+      : null,
+    probability: analysis?.probabilityJpgBase64
+      ? `data:image/jpeg;base64,${analysis.probabilityJpgBase64}`
+      : null,
+    mask: analysis?.maskPngBase64
+      ? `data:image/png;base64,${analysis.maskPngBase64}`
+      : null,
   };
 
+  const selectedImage = images[activeView];
+
+  const inconsistentRegions =
+    hasSpill && regionsAvailable && regions.length === 0;
+
+  const alertClasses = {
+    HIGH: "border-rose-400/30 bg-rose-400/10 text-rose-300",
+    MEDIUM: "border-amber-400/30 bg-amber-400/10 text-amber-300",
+    LOW: "border-cyan-400/30 bg-cyan-400/10 text-cyan-300",
+    NONE: "border-slate-600 bg-slate-800/50 text-slate-300",
+    UNASSESSED:
+      "border-amber-400/30 bg-amber-400/10 text-amber-300",
+    UNAVAILABLE:
+      "border-slate-600 bg-slate-800/50 text-slate-300",
+  };
+
+  let detectionLabel = "No saved analysis";
+
+  if (analysis) {
+    if (!hasSpill) {
+      detectionLabel = "No oil-like pixels detected";
+    } else if (!regionsAvailable) {
+      detectionLabel = "Oil-like pixels detected • regions unavailable";
+    } else if (regions.length === 0) {
+      detectionLabel =
+        "Oil-like pixels detected • region metadata missing or inconsistent";
+    } else {
+      detectionLabel =
+        `Oil-like pixels detected • ${regions.length} region` +
+        (regions.length === 1 ? "" : "s");
+    }
+  }
+
+  if (!analysis) {
+    return (
+      <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-8 text-slate-200">
+        <h1 className="text-2xl font-bold">No analysis available</h1>
+
+        <p className="mt-3 text-sm text-slate-400">
+          Upload an image through New Analysis to generate a result.
+        </p>
+
+        <button
+          type="button"
+          onClick={() => navigate("/analysis/new")}
+          className="mt-6 rounded-xl bg-cyan-400 px-5 py-3 text-sm font-bold text-slate-950"
+        >
+          New Analysis
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-[#020617] text-slate-100">
-      <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute left-0 top-20 h-96 w-96 rounded-full bg-cyan-500/5 blur-3xl" />
-        <div className="absolute right-0 top-1/3 h-96 w-96 rounded-full bg-blue-500/5 blur-3xl" />
+    <div className="space-y-6 text-slate-100">
+      <header className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+        <div>
+          <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-cyan-300">
+            <Satellite size={16} />
+            Satellite Investigation
+          </p>
+
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <h1 className="text-3xl font-bold md:text-4xl">
+              Spill Analysis
+            </h1>
+
+            <span
+              className={`rounded-full border px-3 py-1 text-xs font-bold ${
+                alertClasses[alertLevel] || alertClasses.UNAVAILABLE
+              }`}
+            >
+              Alert: {alertLevel}
+            </span>
+          </div>
+
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-400">
+            {alertReason}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => navigate("/analysis/new")}
+          className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm"
+        >
+          Analyze Another Image
+          <ArrowRight size={16} />
+        </button>
+      </header>
+
+      {inconsistentRegions && (
+        <div className="flex gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/5 p-4">
+          <AlertTriangle
+            size={20}
+            className="shrink-0 text-amber-300"
+          />
+
+          <p className="text-sm leading-6 text-amber-200">
+            This saved result contains detected pixels but no region
+            metadata. Upload the image again after restarting the
+            updated backend. The missing metrics are not evidence
+            that the model detected nothing.
+          </p>
+        </div>
+      )}
+
+      <div className="grid gap-6 xl:grid-cols-[1.5fr_0.7fr]">
+        <section className="overflow-hidden rounded-3xl border border-white/10 bg-slate-950/70">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 p-5">
+            <h2 className="font-semibold">
+              Detection Visualization
+            </h2>
+
+            <div className="flex flex-wrap gap-2">
+              {[
+                ["original", "Original"],
+                ["overlay", "Overlay"],
+                ["probability", "Probability"],
+                ["mask", "Mask"],
+              ].map(([view, label]) => (
+                <button
+                  key={view}
+                  type="button"
+                  disabled={!images[view]}
+                  onClick={() => setActiveView(view)}
+                  className={`rounded-lg border px-3 py-2 text-xs transition disabled:cursor-not-allowed disabled:opacity-30 ${
+                    activeView === view
+                      ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-300"
+                      : "border-white/10 text-slate-400"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="border-b border-white/10 px-5 py-3 text-sm text-cyan-300">
+            {detectionLabel}
+          </div>
+
+          <div className="flex min-h-[420px] items-center justify-center bg-[#06131d] p-2">
+            {selectedImage ? (
+              <img
+                src={selectedImage}
+                alt={`OILTRACE ${activeView} visualization`}
+                className="max-h-[700px] w-full object-contain"
+              />
+            ) : (
+              <p className="text-sm text-slate-500">
+                This view is unavailable for the saved result.
+              </p>
+            )}
+          </div>
+        </section>
+
+        <aside className="space-y-4">
+          <Metric
+            icon={ScanLine}
+            label="Oil Coverage"
+            value={coverage}
+            description="Percentage of prediction-mask pixels classified as oil-like."
+          />
+
+          <Metric
+            icon={Target}
+            label="Largest Region Mean Probability"
+            value={confidence}
+            description="Mean raw model probability within the largest connected region. This is not a verified accuracy score."
+          />
+
+          <Metric
+            icon={Layers}
+            label="Candidate Regions"
+            value={
+              inconsistentRegions || !regionsAvailable
+                ? "Unavailable"
+                : regions.length
+            }
+            description="Connected foreground regions reported by the backend."
+          />
+
+          <Metric
+            icon={MapPin}
+            label="Location"
+            value={inspection.location || "Not provided"}
+            description="User-entered context; not inferred geographic coordinates."
+          />
+        </aside>
       </div>
 
-      <div className="relative space-y-6">
+      <section className="rounded-3xl border border-white/10 bg-slate-950/70 p-5">
+        <h2 className="flex items-center gap-2 text-lg font-semibold">
+          <Layers size={19} className="text-cyan-300" />
+          Region Details
+        </h2>
 
-        {/* Header */}
-        <motion.div
-          initial={{ opacity: 0, y: -15 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end"
-        >
-          <div>
-            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-400">
-              <Satellite size={14} />
-              Satellite Investigation
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-3xl font-bold md:text-4xl">
-                Spill Analysis
-              </h1>
-
-              <span
-                className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-wider ${
-                  error
-                    ? "border-amber-400/20 bg-amber-400/10 text-amber-400"
-                    : "border-emerald-400/20 bg-emerald-400/10 text-emerald-400"
-                }`}
+        {regions.length > 0 ? (
+          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {regions.map((region, index) => (
+              <article
+                key={region.region_id ?? index}
+                className="rounded-2xl border border-white/10 bg-white/[0.03] p-4"
               >
-                {loading
-                  ? "Loading Analysis"
-                  : error
-                    ? "Fallback Mode"
-                    : "AI Analysis Complete"}
-              </span>
-            </div>
+                <h3 className="font-semibold text-cyan-300">
+                  Region {region.region_id ?? index + 1}
+                </h3>
 
-            <p className="mt-2 text-sm text-slate-400">
-              Satellite-derived characterization of the
-              detected maritime anomaly.
-            </p>
+                <dl className="mt-4 space-y-3 text-sm">
+                  <div>
+                    <dt className="text-slate-500">Area</dt>
+                    <dd>{region.pixel_count ?? "Unavailable"} pixels</dd>
+                  </div>
+
+                  <div>
+                    <dt className="text-slate-500">
+                      Mean probability
+                    </dt>
+                    <dd>
+                      {probabilityPercent(region.mean_probability)}
+                    </dd>
+                  </div>
+
+                  <div>
+                    <dt className="text-slate-500">
+                      Maximum probability
+                    </dt>
+                    <dd>
+                      {probabilityPercent(region.max_probability)}
+                    </dd>
+                  </div>
+
+                  <div>
+                    <dt className="text-slate-500">Bounding box</dt>
+                    <dd>
+                      {region.bbox
+                        ? `${region.bbox.width} × ${region.bbox.height} px`
+                        : "Unavailable"}
+                    </dd>
+                  </div>
+
+                  <div>
+                    <dt className="text-slate-500">
+                      Centroid in mask coordinates
+                    </dt>
+                    <dd>
+                      {typeof region.centroid?.x === "number" &&
+                      typeof region.centroid?.y === "number"
+                        ? `${region.centroid.x.toFixed(1)}, ${region.centroid.y.toFixed(1)}`
+                        : "Unavailable"}
+                    </dd>
+                  </div>
+                </dl>
+              </article>
+            ))}
           </div>
-
-          <button
-            onClick={rerunAnalysis}
-            className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs font-semibold text-slate-300 transition hover:border-cyan-400/30 hover:bg-cyan-400/5"
-          >
-            <RotateCcw size={15} />
-            Re-run Analysis
-          </button>
-        </motion.div>
-
-        {/* Error */}
-        {error && (
-          <div className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.04] p-4">
-            <div className="flex items-start gap-3">
-              <AlertTriangle
-                size={17}
-                className="mt-0.5 shrink-0 text-amber-400"
-              />
-
-              <div>
-                <p className="text-sm font-semibold text-amber-300">
-                  Live data warning
-                </p>
-
-                <p className="mt-1 text-xs text-slate-500">
-                  {error}
-                </p>
-              </div>
-            </div>
-          </div>
+        ) : (
+          <p className="mt-4 text-sm text-slate-400">
+            {hasSpill
+              ? "Region metadata is unavailable for this saved result."
+              : "No foreground regions were reported."}
+          </p>
         )}
+      </section>
 
-        {/* Processing */}
-        {processing && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.03] p-4"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Activity
-                  size={17}
-                  className="animate-pulse text-cyan-400"
-                />
+      <div className="flex items-start gap-3 rounded-2xl border border-cyan-400/10 bg-cyan-400/5 p-5">
+        <CheckCircle2
+          size={20}
+          className="shrink-0 text-cyan-300"
+        />
 
-                <div>
-                  <p className="text-sm font-semibold">
-                    Processing satellite data...
-                  </p>
-
-                  <p className="text-[10px] text-slate-600">
-                    Loading spill detection and investigation data.
-                  </p>
-                </div>
-              </div>
-
-              <span className="text-sm font-bold text-cyan-400">
-                {progress}%
-              </span>
-            </div>
-
-            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/5">
-              <motion.div
-                className="h-full rounded-full bg-cyan-400"
-                animate={{
-                  width: `${progress}%`,
-                }}
-                transition={{
-                  duration: 0.15,
-                }}
-              />
-            </div>
-          </motion.div>
-        )}
-
-        <div className="grid gap-6 xl:grid-cols-[1.35fr_.65fr]">
-
-          {/* Satellite visualization */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.98 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="overflow-hidden rounded-3xl border border-white/10 bg-white/[0.03] backdrop-blur-xl"
-          >
-            <div className="flex items-center justify-between border-b border-white/10 p-4">
-              <div className="flex items-center gap-3">
-                <div className="rounded-xl bg-cyan-400/10 p-2 text-cyan-400">
-                  <Crosshair size={18} />
-                </div>
-
-                <div>
-                  <h2 className="text-sm font-semibold">
-                    Detection Visualization
-                  </h2>
-
-                  <p className="text-[10px] text-slate-600">
-                    AI segmentation overlay
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="rounded-lg border border-white/10 p-2 text-slate-500 hover:text-white"
-              >
-                <Maximize2 size={15} />
-              </button>
-            </div>
-
-            <div className="relative h-[470px] overflow-hidden bg-[#06131d]">
-              {customInspection?.imageDataUrl ? (
-                <img
-                  src={customInspection.imageDataUrl}
-                  alt="Satellite capture"
-                  className="absolute inset-0 h-full w-full object-cover opacity-80"
-                />
-              ) : (
-                <>
-                  {/* Ocean grid */}
-                  <div
-                    className="absolute inset-0 opacity-20"
-                    style={{
-                      backgroundImage:
-                        "linear-gradient(rgba(34,211,238,.18) 1px, transparent 1px), linear-gradient(90deg, rgba(34,211,238,.18) 1px, transparent 1px)",
-                      backgroundSize: "45px 45px",
-                    }}
-                  />
-
-                  {/* Simulated ocean */}
-                  <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(14,116,144,.22),transparent_65%)]" />
-                </>
-              )}
-
-              {/* Dynamic Spill Bounding and Centroid Overlay */}
-              {analysisData?.analysis?.bbox ? (
-                <>
-                  {/* Dynamic Spill Highlight based on detected bounding box */}
-                  <motion.div
-                    animate={{
-                      scale: [1, 1.03, 1],
-                      opacity: [0.75, 0.9, 0.75],
-                    }}
-                    transition={{
-                      duration: 3,
-                      repeat: Infinity,
-                    }}
-                    className="absolute rounded-2xl border border-orange-400/70 bg-orange-500/25 shadow-[0_0_50px_rgba(249,115,22,.25)]"
-                    style={{
-                      left: `${Math.max(2, Math.min(85, analysisData.analysis.bbox.leftPct))}%`,
-                      top: `${Math.max(2, Math.min(85, analysisData.analysis.bbox.topPct))}%`,
-                      width: `${Math.max(12, Math.min(90, analysisData.analysis.bbox.widthPct))}%`,
-                      height: `${Math.max(12, Math.min(90, analysisData.analysis.bbox.heightPct))}%`,
-                    }}
-                  />
-
-                  {/* Centroid core */}
-                  <div
-                    className="absolute h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-orange-400 shadow-[0_0_25px_rgba(251,146,60,.9)]"
-                    style={{
-                      left: `${Math.max(5, Math.min(95, analysisData.analysis.center.xPct))}%`,
-                      top: `${Math.max(5, Math.min(95, analysisData.analysis.center.yPct))}%`,
-                    }}
-                  />
-
-                  {/* AI Detection Boundary */}
-                  <div
-                    className="absolute rounded-3xl border border-dashed border-cyan-400/60"
-                    style={{
-                      left: `${Math.max(1, analysisData.analysis.bbox.leftPct - 3)}%`,
-                      top: `${Math.max(1, analysisData.analysis.bbox.topPct - 3)}%`,
-                      width: `${Math.min(98, analysisData.analysis.bbox.widthPct + 6)}%`,
-                      height: `${Math.min(98, analysisData.analysis.bbox.heightPct + 6)}%`,
-                    }}
-                  />
-                </>
-              ) : (
-                <>
-                  {/* Fallback Spill */}
-                  <motion.div
-                    animate={{
-                      scale: [1, 1.04, 1],
-                      opacity: [0.72, 0.85, 0.72],
-                    }}
-                    transition={{
-                      duration: 3,
-                      repeat: Infinity,
-                    }}
-                    className="absolute left-[43%] top-[43%] h-40 w-64 -rotate-12 rounded-[50%] border border-orange-400/50 bg-orange-500/20 shadow-[0_0_60px_rgba(249,115,22,.18)]"
-                  />
-
-                  <div className="absolute left-[48%] top-[45%] h-4 w-4 rounded-full bg-orange-400 shadow-[0_0_25px_rgba(251,146,60,.8)]" />
-
-                  {/* Detection boundary */}
-                  <div className="absolute left-[37%] top-[35%] h-56 w-[390px] rotate-[-10deg] rounded-[50%] border border-dashed border-cyan-400/50" />
-                </>
-              )}
-
-              {/* Coordinates */}
-              <div className="absolute left-5 top-5 rounded-xl border border-white/10 bg-black/30 px-3 py-2 backdrop-blur-md">
-                <p className="text-[9px] uppercase tracking-wider text-slate-600">
-                  Detected Coordinates
-                </p>
-
-                <p className="mt-1 text-xs font-semibold text-cyan-400">
-                  {analysisData.coordinates}
-                </p>
-              </div>
-
-              {/* Legend */}
-              <div className="absolute bottom-5 left-5 rounded-xl border border-white/10 bg-black/40 p-3 backdrop-blur-md">
-                <div className="flex items-center gap-3 text-[10px] text-slate-400">
-                  <span className="h-2.5 w-2.5 rounded-full bg-orange-400" />
-                  Detected Spill
-                </div>
-
-                <div className="mt-2 flex items-center gap-3 text-[10px] text-slate-400">
-                  <span className="h-2.5 w-2.5 rounded-full border border-cyan-400" />
-                  AI Boundary
-                </div>
-              </div>
-
-              <div className="absolute bottom-5 right-5 flex items-center gap-2 rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-[10px] text-slate-500 backdrop-blur-md">
-                <Satellite
-                  size={13}
-                  className="text-cyan-400"
-                />
-                SATELLITE ANALYSIS
-              </div>
-            </div>
-          </motion.div>
-
-          {/* Metrics */}
-          <div className="space-y-4">
-            <Metric
-              icon={Maximize2}
-              label="Estimated Spill Area"
-              value={analysisData.area}
-              sub="AI geometric estimation"
-            />
-
-            <Metric
-              icon={Target}
-              label="Detection Confidence"
-              value={`${analysisData.confidence}%`}
-              sub="Model confidence score"
-            />
-
-            <Metric
-              icon={Clock3}
-              label="Detection Time"
-              value={analysisData.detectedAt}
-              sub="Backend incident record"
-            />
-
-            <Metric
-              icon={Navigation}
-              label="Spill Shape"
-              value={analysisData.shape}
-              sub={`Perimeter: ${analysisData.perimeter}`}
-            />
-
-            {/* Risk */}
-            <div className="rounded-2xl border border-orange-400/20 bg-orange-400/[0.04] p-5">
-              <div className="flex items-center gap-3">
-                <div className="rounded-xl bg-orange-400/10 p-2.5 text-orange-400">
-                  <AlertTriangle size={19} />
-                </div>
-
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-slate-600">
-                    Environmental Risk
-                  </p>
-
-                  <p className="mt-1 text-xl font-bold text-orange-400">
-                    {analysisData.severity}
-                  </p>
-                </div>
-              </div>
-
-              <p className="mt-4 text-xs leading-6 text-slate-500">
-                Detected spill characteristics are presented as
-                investigation-support information. They do not independently
-                establish responsibility or liability.
-              </p>
-            </div>
-
-            {/* Location */}
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-              <div className="flex items-center gap-3">
-                <MapPin
-                  size={17}
-                  className="text-cyan-400"
-                />
-
-                <div>
-                  <p className="text-[10px] text-slate-600">
-                    Detection Region
-                  </p>
-
-                  <p className="mt-1 text-sm font-semibold">
-                    {analysisData.location}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Analysis confidence */}
-        <div className="grid gap-4 md:grid-cols-3">
-          {[
-            [
-              "Satellite Detection",
-              analysisData.confidence,
-              "Backend incident confidence",
-              CheckCircle2,
-            ],
-            [
-              "Geometric Confidence",
-              analysisData.confidence,
-              "Derived from available incident data",
-              Maximize2,
-            ],
-            [
-              "Environmental Signal",
-              analysisData.confidence,
-              "Available incident signal",
-              Waves,
-            ],
-          ].map(([title, value, sub, Icon]) => (
-            <div
-              key={title}
-              className="rounded-2xl border border-white/10 bg-white/[0.03] p-5"
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-slate-500">
-                  {title}
-                </p>
-
-                <Icon
-                  size={16}
-                  className="text-cyan-400"
-                />
-              </div>
-
-              <div className="mt-4 flex items-end justify-between">
-                <p className="text-2xl font-bold">
-                  {Number(value || 0).toFixed(1)}%
-                </p>
-
-                <span className="text-[10px] font-semibold text-emerald-400">
-                  {sub}
-                </span>
-              </div>
-
-              <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/5">
-                <div
-                  className="h-full rounded-full bg-cyan-400"
-                  style={{
-                    width: `${Math.min(
-                      Number(value || 0),
-                      100
-                    )}%`,
-                  }}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Next step */}
-        <div className="flex flex-col justify-between gap-4 rounded-3xl border border-cyan-400/10 bg-cyan-400/[0.025] p-5 sm:flex-row sm:items-center">
-          <div className="flex gap-3">
-            <div className="rounded-xl bg-cyan-400/10 p-2.5 text-cyan-400">
-              <ShieldCheck size={19} />
-            </div>
-
-            <div>
-              <h3 className="text-sm font-semibold">
-                Continue Investigation
-              </h3>
-
-              <p className="mt-1 text-xs text-slate-600">
-                Use environmental conditions to predict spill movement
-                and estimate its probable origin.
-              </p>
-            </div>
-          </div>
-
-          <button
-            onClick={() => navigate("/analysis/drift")}
-            className="group flex items-center justify-center gap-2 rounded-xl bg-cyan-400 px-5 py-3 text-xs font-bold text-slate-950 transition hover:bg-cyan-300"
-          >
-            Run Drift Prediction
-
-            <ArrowRight
-              size={15}
-              className="transition-transform group-hover:translate-x-1"
-            />
-          </button>
-        </div>
+        <p className="text-sm leading-6 text-slate-400">
+          These outputs describe the model prediction, not confirmed
+          oil contamination. Physical area, geographic coordinates,
+          spill age, drift, and vessel responsibility are not
+          established by this image-only result.
+        </p>
       </div>
     </div>
   );
