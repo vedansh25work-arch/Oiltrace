@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 
 import {
@@ -9,14 +10,12 @@ import {
   Radar,
   ScanLine,
   Satellite,
-  ShieldCheck,
   Target,
   TrendingUp,
 } from "lucide-react";
 
 
 import StatCard from "../Components/StatCard";
-import MapView from "../Components/MapView";
 import SpillCard from "../Components/SpillCard";
 import RiskBadge from "../Components/RiskBadge";
 
@@ -24,8 +23,44 @@ import RiskBadge from "../Components/RiskBadge";
 import { getLiveResults } from "../Services/api";
 
 
+const MANUAL_PREDICTION_KEY =
+  "oiltrace.latest-manual-prediction.v1";
+
+
+function readManualPrediction() {
+  try {
+    const saved = JSON.parse(
+      window.sessionStorage.getItem(
+        MANUAL_PREDICTION_KEY
+      ) || "null"
+    );
+
+
+    if (!saved || typeof saved !== "object") {
+      return null;
+    }
+
+
+    if (typeof saved.has_spill !== "boolean") {
+      return null;
+    }
+
+
+    return saved;
+  } catch {
+    return null;
+  }
+}
+
+
 export default function Dashboard() {
+  const navigate = useNavigate();
+
+
   const [liveResults, setLiveResults] = useState([]);
+  const [manualPrediction, setManualPrediction] = useState(
+    readManualPrediction
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -43,12 +78,8 @@ export default function Dashboard() {
 
 
         setLiveResults(
-          Array.isArray(data?.results)
-            ? data.results
-            : []
+          Array.isArray(data?.results) ? data.results : []
         );
-
-
         setError("");
       } catch (requestError) {
         console.error(
@@ -73,7 +104,10 @@ export default function Dashboard() {
     loadLiveResults();
 
 
-    const interval = setInterval(loadLiveResults, 10000);
+    const interval = setInterval(
+      loadLiveResults,
+      10000
+    );
 
 
     return () => {
@@ -83,25 +117,63 @@ export default function Dashboard() {
   }, []);
 
 
-  const latestResult = liveResults[0] || null;
+  useEffect(() => {
+    const checkManualPrediction = () => {
+      setManualPrediction(readManualPrediction());
+    };
+
+
+    checkManualPrediction();
+
+
+    window.addEventListener(
+      "focus",
+      checkManualPrediction
+    );
+
+
+    return () => {
+      window.removeEventListener(
+        "focus",
+        checkManualPrediction
+      );
+    };
+  }, []);
+
+
+  const allResults = useMemo(() => {
+    const results = [...liveResults];
+
+
+    if (manualPrediction) {
+      results.unshift(manualPrediction);
+    }
+
+
+    return results;
+  }, [liveResults, manualPrediction]);
+
+
+  const latestResult = allResults[0] || null;
 
 
   const spillCount = useMemo(
     () =>
-      liveResults.filter((result) => result.has_spill)
-        .length,
-    [liveResults]
+      allResults.filter(
+        (result) => result.has_spill
+      ).length,
+    [allResults]
   );
 
 
   const highAlertCount = useMemo(
     () =>
-      liveResults.filter(
+      allResults.filter(
         (result) =>
-          result.alert?.alert_level?.toUpperCase() ===
-          "HIGH"
+          result.alert?.alert_level
+            ?.toUpperCase() === "HIGH"
       ).length,
-    [liveResults]
+    [allResults]
   );
 
 
@@ -123,7 +195,7 @@ export default function Dashboard() {
       : "—";
 
 
-  const latestFileName = latestResult
+  const latestFileName = latestResult?.image
     ? latestResult.image
         .split("\\")
         .pop()
@@ -143,30 +215,34 @@ export default function Dashboard() {
 
 
   const latestAlertLevel =
-    latestResult?.alert?.alert_level?.toUpperCase() ||
-    "NONE";
+    latestResult?.alert?.alert_level
+      ?.toUpperCase() || "NONE";
+
+
+  const latestSource =
+    latestResult?.source === "manual_upload"
+      ? "MANUAL UPLOAD"
+      : "LIVE WATCHER";
 
 
   const alertStyles = {
-    HIGH: "border-rose-400/20 bg-rose-500/10 text-rose-300",
+    HIGH:
+      "border-rose-400/20 bg-rose-500/10 text-rose-300",
     MEDIUM:
       "border-amber-400/20 bg-amber-400/10 text-amber-300",
-    LOW: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300",
-    NONE: "border-slate-700 bg-slate-900 text-slate-400",
+    LOW:
+      "border-emerald-400/20 bg-emerald-400/10 text-emerald-300",
+    NONE:
+      "border-slate-700 bg-slate-900 text-slate-400",
   };
 
 
   return (
     <div className="page-enter p-4 sm:p-6">
-      {/* HEADER */}
-
-
       <div className="mb-7 flex flex-col justify-between gap-5 xl:flex-row xl:items-end">
         <div>
           <div className="mb-2 flex items-center gap-2">
             <span className="status-dot" />
-
-
             <span className="text-[9px] font-bold uppercase tracking-[.25em] text-emerald-400">
               OILTRACE Live Network Operational
             </span>
@@ -183,8 +259,8 @@ export default function Dashboard() {
 
 
           <p className="mt-2 text-xs text-slate-500">
-            Real-time oil spill detection and live image
-            analysis.
+            Live watcher detections and manual image
+            prediction results.
           </p>
         </div>
 
@@ -193,16 +269,13 @@ export default function Dashboard() {
           type="button"
           className="glow-button flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-xs font-bold text-white"
           onClick={() =>
-            (window.location.href = "/analysis/new")
+            navigate("/spill-analysis")
           }
         >
           <ScanLine size={15} />
           NEW INVESTIGATION
         </button>
       </div>
-
-
-      {/* ERROR */}
 
 
       {error && (
@@ -219,14 +292,11 @@ export default function Dashboard() {
       )}
 
 
-      {/* KPI */}
-
-
       <div className="stagger grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           title="Spill Detections"
           value={loading ? "…" : spillCount}
-          change={`${liveResults.length} recent analyses`}
+          change={`${allResults.length} recent analyses`}
           icon={AlertTriangle}
           color="red"
         />
@@ -243,9 +313,7 @@ export default function Dashboard() {
 
         <StatCard
           title="Latest Confidence"
-          value={
-            loading ? "…" : latestConfidence
-          }
+          value={loading ? "…" : latestConfidence}
           change={`Model: ${
             latestResult?.model || "v2.1"
           }`}
@@ -256,17 +324,12 @@ export default function Dashboard() {
 
         <StatCard
           title="Latest Coverage"
-          value={
-            loading ? "…" : latestCoverage
-          }
+          value={loading ? "…" : latestCoverage}
           change={`Source: ${latestFileName}`}
           icon={Layers}
           color="green"
         />
       </div>
-
-
-      {/* LATEST RESULT */}
 
 
       <div className="mt-5 grid gap-5 xl:grid-cols-[1.6fr_.8fr]">
@@ -280,18 +343,14 @@ export default function Dashboard() {
                 />
                 Latest Detection
               </h2>
-
-
               <p className="mt-1 text-[10px] text-slate-600">
-                Most recent image processed by OILTRACE
+                Most recent OILTRACE analysis
               </p>
             </div>
 
 
             <div className="flex items-center gap-2">
               <span className="status-dot" />
-
-
               <span className="text-[9px] text-emerald-400">
                 AUTO REFRESH • 10S
               </span>
@@ -306,32 +365,36 @@ export default function Dashboard() {
                   <p className="text-sm font-bold text-white">
                     {latestFileName}
                   </p>
-
-
                   <p className="mt-1 text-[10px] text-slate-500">
                     {latestTime}
                   </p>
                 </div>
 
 
-                <span
-                  className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase ${
-                    alertStyles[latestAlertLevel] ||
-                    alertStyles.NONE
-                  }`}
-                >
-                  {latestAlertLevel}
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-cyan-400/20 px-3 py-1 text-[10px] font-bold uppercase text-cyan-300">
+                    {latestSource}
+                  </span>
+
+
+                  <span
+                    className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase ${
+                      alertStyles[
+                        latestAlertLevel
+                      ] || alertStyles.NONE
+                    }`}
+                  >
+                    {latestAlertLevel}
+                  </span>
+                </div>
               </div>
 
 
               <div className="mt-5 grid gap-4 md:grid-cols-3">
                 <div className="rounded-xl border border-white/[.05] bg-white/[.02] p-4">
                   <p className="text-[9px] uppercase tracking-widest text-slate-600">
-                    Spill Detected
+                    Oil-like pixels predicted
                   </p>
-
-
                   <p className="mt-2 text-lg font-black text-white">
                     {latestResult.has_spill
                       ? "Yes"
@@ -344,10 +407,10 @@ export default function Dashboard() {
                   <p className="text-[9px] uppercase tracking-widest text-slate-600">
                     Regions
                   </p>
-
-
                   <p className="mt-2 text-lg font-black text-white">
-                    {Array.isArray(latestResult.regions)
+                    {Array.isArray(
+                      latestResult.regions
+                    )
                       ? latestResult.regions.length
                       : 0}
                   </p>
@@ -358,8 +421,6 @@ export default function Dashboard() {
                   <p className="text-[9px] uppercase tracking-widest text-slate-600">
                     Coverage
                   </p>
-
-
                   <p className="mt-2 text-lg font-black text-white">
                     {latestCoverage}
                   </p>
@@ -371,12 +432,18 @@ export default function Dashboard() {
                 {latestResult.alert?.reason ||
                   "No alert information available."}
               </p>
+
+
+              <p className="mt-3 text-xs leading-5 text-amber-200">
+                This is a model result, not independent
+                verification of an oil spill.
+              </p>
             </div>
           ) : (
             <div className="p-5 text-xs text-slate-500">
               {loading
                 ? "Loading latest detection..."
-                : "No live detection results available yet."}
+                : "No detection results available yet."}
             </div>
           )}
         </div>
@@ -388,14 +455,10 @@ export default function Dashboard() {
               <h2 className="text-sm font-bold text-white">
                 Intelligence Radar
               </h2>
-
-
               <p className="mt-1 text-[10px] text-slate-600">
                 Detection activity monitor
               </p>
             </div>
-
-
             <Radar
               size={18}
               className="text-cyan-400"
@@ -415,8 +478,6 @@ export default function Dashboard() {
                   left: "65%",
                 }}
               />
-
-
               <span
                 className="radar-point"
                 style={{
@@ -424,8 +485,6 @@ export default function Dashboard() {
                   left: "35%",
                 }}
               />
-
-
               <span
                 className="radar-point"
                 style={{
@@ -450,22 +509,16 @@ export default function Dashboard() {
           <div className="mt-7 grid grid-cols-2 gap-3">
             <RadarStat
               label="Analyses"
-              value={liveResults.length}
+              value={allResults.length}
             />
-
-
             <RadarStat
               label="Spills"
               value={spillCount}
             />
-
-
             <RadarStat
               label="High Alerts"
               value={highAlertCount}
             />
-
-
             <RadarStat
               label="Latest"
               value={latestAlertLevel}
@@ -473,9 +526,6 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-
-
-      {/* LIVE RESULTS */}
 
 
       <div className="mt-5 glass rounded-2xl p-5">
@@ -486,29 +536,28 @@ export default function Dashboard() {
                 size={16}
                 className="text-cyan-400"
               />
-              Live OILTRACE Detections
+              OILTRACE Detections
             </h2>
-
-
             <p className="mt-1 text-[10px] text-slate-600">
-              Recent images processed by the live watcher
+              Live watcher results and manual upload
+              predictions
             </p>
           </div>
         </div>
 
 
-        {liveResults.length === 0 ? (
+        {allResults.length === 0 ? (
           <div className="mt-5 rounded-xl border border-white/[.05] bg-white/[.02] p-5 text-xs text-slate-500">
             {loading
-              ? "Loading live detections..."
-              : "No live detection results available yet."}
+              ? "Loading detections..."
+              : "No detection results available yet."}
           </div>
         ) : (
           <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {liveResults.map((result) => {
+            {allResults.map((result, index) => {
               const alertLevel =
-                result.alert?.alert_level?.toUpperCase() ||
-                "NONE";
+                result.alert?.alert_level
+                  ?.toUpperCase() || "NONE";
 
 
               const regionCount = Array.isArray(
@@ -529,15 +578,26 @@ export default function Dashboard() {
 
 
               const fileName = result.image
-                .split("\\")
-                .pop()
-                .split("/")
-                .pop();
+                ? result.image
+                    .split("\\")
+                    .pop()
+                    .split("/")
+                    .pop()
+                : "Uploaded image";
+
+
+              const source =
+                result.source === "manual_upload"
+                  ? "MANUAL UPLOAD"
+                  : "LIVE WATCHER";
 
 
               return (
                 <div
-                  key={result.result_id}
+                  key={
+                    result.result_id ||
+                    `manual-${index}`
+                  }
                   className="rounded-2xl border border-white/[.05] bg-white/[.02] p-4"
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -545,26 +605,26 @@ export default function Dashboard() {
                       <p className="truncate text-xs font-bold text-white">
                         {fileName}
                       </p>
-
-
                       <p className="mt-1 text-[10px] text-slate-500">
-                        {new Date(
-                          result.processed_at
-                        ).toLocaleString("en-IN", {
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                        })}
+                        {result.processed_at
+                          ? new Date(
+                              result.processed_at
+                            ).toLocaleString(
+                              "en-IN",
+                              {
+                                dateStyle:
+                                  "medium",
+                                timeStyle:
+                                  "short",
+                              }
+                            )
+                          : "Unavailable"}
                       </p>
                     </div>
 
 
-                    <span
-                      className={`shrink-0 rounded-full border px-2 py-1 text-[8px] font-bold uppercase ${
-                        alertStyles[alertLevel] ||
-                        alertStyles.NONE
-                      }`}
-                    >
-                      {alertLevel}
+                    <span className="shrink-0 rounded-full border border-cyan-400/20 px-2 py-1 text-[8px] font-bold uppercase text-cyan-300">
+                      {source}
                     </span>
                   </div>
 
@@ -572,12 +632,12 @@ export default function Dashboard() {
                   <div className="mt-4 grid grid-cols-3 gap-2">
                     <div className="rounded-lg border border-white/[.05] bg-white/[.02] p-2">
                       <p className="text-[8px] uppercase text-slate-600">
-                        Spill
+                        Oil-like pixels
                       </p>
-
-
                       <p className="mt-1 text-xs font-bold text-white">
-                        {result.has_spill ? "Yes" : "No"}
+                        {result.has_spill
+                          ? "Yes"
+                          : "No"}
                       </p>
                     </div>
 
@@ -586,8 +646,6 @@ export default function Dashboard() {
                       <p className="text-[8px] uppercase text-slate-600">
                         Regions
                       </p>
-
-
                       <p className="mt-1 text-xs font-bold text-white">
                         {regionCount}
                       </p>
@@ -598,8 +656,6 @@ export default function Dashboard() {
                       <p className="text-[8px] uppercase text-slate-600">
                         Confidence
                       </p>
-
-
                       <p className="mt-1 text-xs font-bold text-white">
                         {confidence}
                       </p>
@@ -619,23 +675,16 @@ export default function Dashboard() {
       </div>
 
 
-      {/* CURRENT DETECTION */}
-
-
       <div className="mt-5">
         <div className="mb-3 flex items-center justify-between">
           <div>
             <h2 className="text-sm font-bold text-white">
-              Current Spill Detection
+              Current Detection
             </h2>
-
-
             <p className="mt-1 text-[10px] text-slate-600">
-              Latest OILTRACE live result
+              Latest OILTRACE result
             </p>
           </div>
-
-
           <TrendingUp
             size={17}
             className="text-cyan-400"
@@ -647,27 +696,26 @@ export default function Dashboard() {
           {latestResult ? (
             <SpillCard
               spill={{
-                id: latestResult.result_id,
+                id:
+                  latestResult.result_id ||
+                  "manual-latest",
                 location: latestFileName,
                 area: latestCoverage,
                 confidence: latestConfidence,
                 detectedAt: latestTime,
                 risk: latestAlertLevel,
                 status: latestResult.has_spill
-                  ? "Active"
-                  : "Clear",
+                  ? "Model alert"
+                  : "No model alert",
               }}
             />
           ) : (
             <div className="glass rounded-xl p-5 text-xs text-slate-500">
-              No live detection available.
+              No detection available.
             </div>
           )}
         </div>
       </div>
-
-
-      {/* PRIORITY ALERT */}
 
 
       <div className="mt-5 critical rounded-2xl border border-rose-400/10 bg-rose-500/[.03] p-5">
@@ -681,12 +729,10 @@ export default function Dashboard() {
             <p className="text-[9px] font-bold uppercase tracking-widest text-rose-400">
               Priority Alert
             </p>
-
-
             <p className="mt-1 text-sm font-bold text-white">
               {latestResult?.has_spill
-                ? `${latestAlertLevel} spill alert`
-                : "No active spill alert"}
+                ? `${latestAlertLevel} oil-like pixel alert`
+                : "No active model alert"}
             </p>
           </div>
         </div>
@@ -695,8 +741,15 @@ export default function Dashboard() {
         <p className="mt-5 text-xs leading-6 text-slate-500">
           {latestResult?.has_spill
             ? latestResult.alert?.reason ||
-              "A potential oil-like region was detected."
-            : "No sufficiently large oil-like region has been detected in the latest image."}
+              "Oil-like pixels were predicted in the latest image."
+            : "No oil-like pixels were predicted in the latest available result."}
+        </p>
+
+
+        <p className="mt-3 text-xs leading-6 text-amber-200">
+          Model predictions are screening signals, not
+          verified spill confirmations or responsibility
+          determinations.
         </p>
 
 
@@ -709,17 +762,12 @@ export default function Dashboard() {
 }
 
 
-function RadarStat({
-  label,
-  value,
-}) {
+function RadarStat({ label, value }) {
   return (
     <div className="rounded-xl border border-white/[.05] bg-white/[.02] p-3">
       <p className="text-[8px] uppercase tracking-widest text-slate-600">
         {label}
       </p>
-
-
       <p className="mt-1 text-lg font-black text-white">
         {value}
       </p>

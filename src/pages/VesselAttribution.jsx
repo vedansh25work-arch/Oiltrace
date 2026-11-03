@@ -1,694 +1,1188 @@
-import { useEffect, useMemo, useState } from "react";
-
-import { getIncidentInvestigation } from "../Services/api";
-
-import { motion } from "framer-motion";
-
+import { useEffect, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
-  Ship,
-  Search,
-  MapPin,
   AlertTriangle,
-  CheckCircle2,
-  ChevronRight,
+  ArrowLeft,
   Radio,
-  Target,
-  Route,
-  Activity,
-  ShieldAlert,
-  Filter,
-  X,
+  Search,
+  Ship,
 } from "lucide-react";
 
-const mapBackendVessel = (vessel, index) => {
-  const reasons = Array.isArray(vessel.reasons) ? vessel.reasons : [];
 
-  const distanceStr =
-    vessel.distance_km != null
-      ? `${Number(vessel.distance_km).toFixed(2)} km`
-      : "Unavailable";
+import api from "../Services/api";
 
-  const proximityVal =
-    vessel.spatial_score != null
-      ? Math.round(Number(vessel.spatial_score))
-      : reasons.some((r) => r.toLowerCase().includes("spatial"))
-        ? 100
-        : 0;
 
-  const timingVal =
-    vessel.temporal_score != null
-      ? Math.round(Number(vessel.temporal_score))
-      : reasons.some((r) => r.toLowerCase().includes("temporal"))
-        ? 100
-        : 0;
+const STORAGE_KEY = "oiltrace.ais-screening.form.v1";
 
-  const trajectoryVal =
-    vessel.trajectory_score != null
-      ? Math.round(Number(vessel.trajectory_score))
-      : Math.round(Number(vessel.combined_score || 0) * 100);
 
-  const lastSeenStr =
-    vessel.time_difference_minutes != null
-      ? `${Math.round(Number(vessel.time_difference_minutes))} min delta`
-      : "Investigation window";
+const EMPTY_FORM = {
+  latitude: "",
+  longitude: "",
+  observedAt: "",
+  lookbackHours: "6",
+  radiusKm: "10",
+  artificialTest: false,
+};
 
-  return {
-    rank: index + 1,
-    name: vessel.vessel_name || "Unknown Vessel",
-    imo: `MMSI ${vessel.mmsi || "—"}`,
-    type: "AIS vessel",
-    flag: "—",
-    distance: distanceStr,
-    proximity: proximityVal,
-    timing: timingVal,
-    trajectory: trajectoryVal,
-    anomaly: Number(vessel.behaviour_score || 0),
-    risk: vessel.priority_level || "LOW",
-    speed: "Unavailable",
-    heading: "Unavailable",
-    lastSeen: lastSeenStr,
-    combinedScore: Number(vessel.combined_score || 0),
-    finalPriority: Number(vessel.final_priority_score || 0),
-    reasons,
+
+const TEST_FORM = {
+  latitude: "25.77005",
+  longitude: "-80.14046",
+  observedAt: "2026-10-31T13:42:00Z",
+  lookbackHours: "1",
+  radiusKm: "1",
+  artificialTest: true,
+};
+
+
+const FORM_FIELDS = [
+  "latitude",
+  "longitude",
+  "observedAt",
+  "lookbackHours",
+  "radiusKm",
+];
+
+
+const OBSERVATION_PARAMS = [
+  "latitude",
+  "longitude",
+  "observed_at",
+  "lookback_hours",
+  "radius_km",
+  "artificial_test",
+];
+
+
+const PANEL =
+  "rounded-2xl border border-white/10 bg-white/[0.03] p-5";
+
+
+const INPUT =
+  "mt-2 w-full rounded-xl border border-white/15 bg-[#020617] px-3 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-400 disabled:opacity-50";
+
+
+function readSavedForm() {
+  try {
+    const saved = JSON.parse(
+      window.sessionStorage.getItem(STORAGE_KEY) || "null"
+    );
+
+
+    const restored = { ...EMPTY_FORM };
+
+
+    if (saved && typeof saved === "object") {
+      for (const field of FORM_FIELDS) {
+        if (typeof saved[field] === "string") {
+          restored[field] = saved[field];
+        }
+      }
+
+
+      restored.artificialTest = saved.artificialTest === true;
+    }
+
+
+    return restored;
+  } catch {
+    return { ...EMPTY_FORM };
+  }
+}
+
+
+function saveForm(form) {
+  try {
+    window.sessionStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(form)
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+
+function readIncomingForm(params) {
+  const incoming = {
+    latitude: params.get("latitude"),
+    longitude: params.get("longitude"),
+    observedAt: params.get("observed_at"),
+    lookbackHours: params.get("lookback_hours"),
+    radiusKm: params.get("radius_km"),
+    artificialTest: params.get("artificial_test") === "1",
   };
-};
 
-const riskStyles = {
-  CRITICAL:
-    "border-red-400/20 bg-red-400/10 text-red-400",
-  HIGH:
-    "border-orange-400/20 bg-orange-400/10 text-orange-400",
-  MEDIUM:
-    "border-amber-400/20 bg-amber-400/10 text-amber-400",
-  LOW:
-    "border-emerald-400/20 bg-emerald-400/10 text-emerald-400",
-};
 
-function ScoreBar({ label, value, suffix = "%" }) {
-  const numericValue = Number(value) || 0;
-  const barWidth =
-    suffix === ""
-      ? Math.min(Math.max(numericValue * 5, 0), 100)
-      : Math.min(Math.max(numericValue, 0), 100);
+  const complete = FORM_FIELDS.every(
+    (field) =>
+      typeof incoming[field] === "string" &&
+      incoming[field].trim() !== ""
+  );
 
+
+  return complete ? incoming : null;
+}
+
+
+function validateObservation(form) {
+  for (const field of FORM_FIELDS) {
+    if (!form[field].trim()) {
+      return (
+        "Enter latitude, longitude, observation time, " +
+        "look-back hours, and radius."
+      );
+    }
+  }
+
+
+  const latitude = Number(form.latitude);
+  const longitude = Number(form.longitude);
+  const lookback = Number(form.lookbackHours);
+  const radius = Number(form.radiusKm);
+
+
+  if (
+    !Number.isFinite(latitude) ||
+    latitude < -90 ||
+    latitude > 90
+  ) {
+    return "Latitude must be between -90 and 90.";
+  }
+
+
+  if (
+    !Number.isFinite(longitude) ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    return "Longitude must be between -180 and 180.";
+  }
+
+
+  const observedAt = form.observedAt.trim();
+
+
+  const match = observedAt.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2})$/i
+  );
+
+
+  if (!match) {
+    return (
+      "Use an ISO timestamp with timezone, such as " +
+      "2026-10-31T13:42:00Z or " +
+      "2026-10-31T19:12:00+05:30."
+    );
+  }
+
+
+  const [
+    ,
+    yearText,
+    monthText,
+    dayText,
+    hourText,
+    minuteText,
+    secondText,
+    ,
+    zone,
+  ] = match;
+
+
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText || "0");
+
+
+  const leapYear =
+    year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+
+
+  const daysPerMonth = [
+    31,
+    leapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+
+
+  if (
+    year < 1 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysPerMonth[month - 1] ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59
+  ) {
+    return "Enter a valid calendar date and time.";
+  }
+
+
+  if (zone.toUpperCase() !== "Z") {
+    const offsetHours = Number(zone.slice(1, 3));
+    const offsetMinutes = Number(zone.slice(4, 6));
+
+
+    if (offsetHours > 23 || offsetMinutes > 59) {
+      return "Enter a valid timezone offset.";
+    }
+  }
+
+
+  if (Number.isNaN(new Date(observedAt).getTime())) {
+    return "Enter a valid observation timestamp.";
+  }
+
+
+  if (
+    !Number.isFinite(lookback) ||
+    lookback <= 0 ||
+    lookback > 72
+  ) {
+    return "Look-back must be greater than 0 and at most 72 hours.";
+  }
+
+
+  if (
+    !Number.isFinite(radius) ||
+    radius <= 0 ||
+    radius > 100
+  ) {
+    return "Radius must be greater than 0 and at most 100 km.";
+  }
+
+
+  return "";
+}
+
+
+function formatNumber(value, decimals = 2, unit = "") {
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "boolean" ||
+    (typeof value === "string" && !value.trim())
+  ) {
+    return "Unavailable";
+  }
+
+
+  const parsed = Number(value);
+
+
+  return Number.isFinite(parsed)
+    ? `${parsed.toFixed(decimals)}${unit}`
+    : "Unavailable";
+}
+
+
+function formatTime(value) {
+  if (!value) return "Unavailable";
+
+
+  const date = new Date(value);
+
+
+  return Number.isNaN(date.getTime())
+    ? "Unavailable"
+    : `${date.toISOString().replace("T", " ").replace("Z", "")} UTC`;
+}
+
+
+function errorMessage(error, fallback) {
+  const detail = error?.response?.data?.detail;
+
+
+  if (typeof detail === "string") {
+    return detail;
+  }
+
+
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        const location = Array.isArray(item?.loc)
+          ? item.loc.join(".")
+          : "";
+
+
+        return `${location ? `${location}: ` : ""}${
+          typeof item?.msg === "string"
+            ? item.msg
+            : "Invalid request."
+        }`;
+      })
+      .join(" ");
+  }
+
+
+  if (error?.code === "ECONNABORTED") {
+    return "The API request timed out. Check the backend terminal.";
+  }
+
+
+  if (error?.response?.status) {
+    return `API request failed (${error.response.status}).`;
+  }
+
+
+  return error?.message || fallback;
+}
+
+
+async function fetchJson(path, signal, params) {
+  const response = await api.get(path, {
+    signal,
+    params,
+    headers: {
+      "Cache-Control": "no-cache",
+    },
+  });
+
+
+  const data = response.data;
+
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("The API returned an invalid response.");
+  }
+
+
+  return data;
+}
+
+
+function Field({ label, children }) {
   return (
-    <div>
-      <div className="mb-1.5 flex justify-between text-[9px]">
-        <span className="text-slate-600">{label}</span>
-
-        <span className="font-semibold text-slate-400">
-          {value}
-          {suffix}
-        </span>
-      </div>
-
-      <div className="h-1 overflow-hidden rounded-full bg-white/5">
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${barWidth}%` }}
-          transition={{ duration: 0.7 }}
-          className="h-full rounded-full bg-cyan-400"
-        />
-      </div>
-    </div>
+    <label className="block text-xs font-medium text-slate-400">
+      {label}
+      {children}
+    </label>
   );
 }
 
+
 export default function VesselAttribution() {
-  const [incident, setIncident] = useState(null);
-  const [vesselData, setVesselData] = useState([]);
-  const [search, setSearch] = useState("");
-  const [riskFilter, setRiskFilter] = useState("All");
-  const [selected, setSelected] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const queryString = searchParams.toString();
+
+
+  const [form, setForm] = useState(
+    () => readIncomingForm(searchParams) || readSavedForm()
+  );
+
+
+  const [storageError, setStorageError] = useState("");
+  const [status, setStatus] = useState(null);
+  const [statusError, setStatusError] = useState("");
+  const [statusLoading, setStatusLoading] = useState(true);
+
+
+  const [result, setResult] = useState(null);
+  const [resultIsTest, setResultIsTest] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+
+
+  const mountedRef = useRef(false);
+  const statusRequestRef = useRef(0);
+  const screeningRequestRef = useRef(0);
+  const statusControllerRef = useRef(null);
+  const screeningControllerRef = useRef(null);
+
+
+  function persist(nextForm) {
+    const saved = saveForm(nextForm);
+
+
+    setStorageError(
+      saved
+        ? ""
+        : "Browser session storage is unavailable. Inputs may be lost on reload."
+    );
+  }
+
+
+  function cancelScreening() {
+    screeningRequestRef.current += 1;
+    screeningControllerRef.current?.abort();
+    screeningControllerRef.current = null;
+    setLoading(false);
+  }
+
 
   useEffect(() => {
-    let ignore = false;
+    mountedRef.current = true;
 
-    async function loadInvestigation() {
-      try {
-        setLoading(true);
-        setError("");
-
-        const data = await getIncidentInvestigation(1);
-
-        if (ignore) return;
-
-        setIncident(data?.incident || null);
-
-        const ranked = Array.isArray(data?.ranked_vessels)
-          ? data.ranked_vessels
-          : [];
-
-        setVesselData(
-          ranked.map(mapBackendVessel)
-        );
-      } catch (err) {
-        if (!ignore) {
-          console.error(
-            "Oiltrace investigation API failed:",
-            err
-          );
-
-          setError(
-            "Unable to load live investigation data."
-          );
-
-          setVesselData([]);
-        }
-      } finally {
-        if (!ignore) {
-          setLoading(false);
-        }
-      }
-    }
-
-    loadInvestigation();
 
     return () => {
-      ignore = true;
+      mountedRef.current = false;
+      statusRequestRef.current += 1;
+      screeningRequestRef.current += 1;
+      statusControllerRef.current?.abort();
+      screeningControllerRef.current?.abort();
     };
   }, []);
 
-  const filteredVessels = useMemo(() => {
-    return vesselData.filter((vessel) => {
-      const query = search.toLowerCase();
 
-      const searchMatch =
-        vessel.name.toLowerCase().includes(query) ||
-        vessel.imo.toLowerCase().includes(query) ||
-        vessel.type.toLowerCase().includes(query);
+  useEffect(() => {
+    const params = new URLSearchParams(queryString);
+    const incoming = readIncomingForm(params);
 
-      const riskMatch =
-        riskFilter === "All" ||
-        vessel.risk === riskFilter;
 
-      return searchMatch && riskMatch;
-    });
-  }, [vesselData, search, riskFilter]);
+    if (!incoming) {
+      const hasObservationParams = OBSERVATION_PARAMS.some(
+        (name) => params.has(name)
+      );
 
-  const highRelevanceCount = vesselData.filter(
-    (vessel) =>
-      vessel.risk === "HIGH" ||
-      vessel.risk === "CRITICAL"
-  ).length;
 
-  const topTrajectory = vesselData[0]
-    ? `${vesselData[0].trajectory}%`
-    : "—";
+      if (hasObservationParams) {
+        setError(
+          "The observation URL is incomplete. Saved inputs were kept; enter the missing details or return to Spill Analysis."
+        );
+      }
 
-  const topCombinedScore = vesselData[0]
-    ? `${Math.round(vesselData[0].combinedScore * 100)}%`
-    : "—";
 
-  const originLocation =
-    incident?.location_name ||
-    (incident?.latitude != null ? "Gulf of Mexico / Coast" : "Unavailable");
+      return;
+    }
 
-  const latNum = incident?.latitude != null ? Number(incident.latitude) : null;
-  const lonNum = incident?.longitude != null ? Number(incident.longitude) : null;
-  const originCoords =
-    latNum != null && lonNum != null
-      ? `${Math.abs(latNum).toFixed(4)}° ${latNum >= 0 ? "N" : "S"}, ${Math.abs(lonNum).toFixed(4)}° ${lonNum >= 0 ? "E" : "W"}`
-      : "Unavailable";
+
+    screeningRequestRef.current += 1;
+    screeningControllerRef.current?.abort();
+    screeningControllerRef.current = null;
+
+
+    setLoading(false);
+    setForm(incoming);
+    setResult(null);
+    setError("");
+    setSearch("");
+
+
+    const saved = saveForm(incoming);
+
+
+    setStorageError(
+      saved
+        ? ""
+        : "Browser session storage is unavailable. Inputs may be lost on reload."
+    );
+
+
+    for (const name of OBSERVATION_PARAMS) {
+      params.delete(name);
+    }
+
+
+    setSearchParams(params, { replace: true });
+  }, [queryString, setSearchParams]);
+
+
+  async function loadStatus() {
+    statusControllerRef.current?.abort();
+
+
+    const controller = new AbortController();
+    const requestId = ++statusRequestRef.current;
+    statusControllerRef.current = controller;
+
+
+    setStatusLoading(true);
+    setStatusError("");
+
+
+    try {
+      const data = await fetchJson(
+        "/ais/status",
+        controller.signal
+      );
+
+
+      if (
+        mountedRef.current &&
+        requestId === statusRequestRef.current
+      ) {
+        setStatus(data);
+      }
+    } catch (requestError) {
+      if (
+        mountedRef.current &&
+        requestId === statusRequestRef.current &&
+        !controller.signal.aborted
+      ) {
+        setStatusError(
+          errorMessage(requestError, "Status request failed.")
+        );
+      }
+    } finally {
+      if (
+        mountedRef.current &&
+        requestId === statusRequestRef.current
+      ) {
+        setStatusLoading(false);
+        statusControllerRef.current = null;
+      }
+    }
+  }
+
+
+  useEffect(() => {
+    loadStatus();
+
+
+    return () => {
+      statusRequestRef.current += 1;
+      statusControllerRef.current?.abort();
+    };
+    // Initial status check; manual checks use the same function.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+
+  function applyForm(nextForm) {
+    cancelScreening();
+    persist(nextForm);
+    setForm(nextForm);
+    setResult(null);
+    setError("");
+    setSearch("");
+  }
+
+
+  function updateField(field, value) {
+    applyForm({ ...form, [field]: value });
+  }
+
+
+  async function runScreening() {
+    if (screeningControllerRef.current) return;
+
+
+    const validationError = validateObservation(form);
+
+
+    if (validationError) {
+      setResult(null);
+      setError(validationError);
+      return;
+    }
+
+
+    const submittedForm = { ...form };
+    persist(submittedForm);
+
+
+    const controller = new AbortController();
+    const requestId = ++screeningRequestRef.current;
+    screeningControllerRef.current = controller;
+
+
+    setLoading(true);
+    setResult(null);
+    setError("");
+    setSearch("");
+
+
+    try {
+      const data = await fetchJson(
+        "/ais/candidates",
+        controller.signal,
+        {
+          latitude: Number(submittedForm.latitude),
+          longitude: Number(submittedForm.longitude),
+          observed_at: new Date(
+            submittedForm.observedAt.trim()
+          ).toISOString(),
+          lookback_hours: Number(submittedForm.lookbackHours),
+          radius_km: Number(submittedForm.radiusKm),
+          limit: 100,
+        }
+      );
+
+
+      if (
+        typeof data.status !== "string" ||
+        !Array.isArray(data.candidates)
+      ) {
+        throw new Error(
+          "The screening API response is missing status or candidates."
+        );
+      }
+
+
+      if (
+        mountedRef.current &&
+        requestId === screeningRequestRef.current
+      ) {
+        setResultIsTest(submittedForm.artificialTest);
+        setResult(data);
+      }
+    } catch (requestError) {
+      if (
+        mountedRef.current &&
+        requestId === screeningRequestRef.current &&
+        !controller.signal.aborted
+      ) {
+        setError(
+          errorMessage(requestError, "Vessel screening failed.")
+        );
+      }
+    } finally {
+      if (
+        mountedRef.current &&
+        requestId === screeningRequestRef.current
+      ) {
+        setLoading(false);
+        screeningControllerRef.current = null;
+      }
+    }
+  }
+
+
+  const candidates = Array.isArray(result?.candidates)
+    ? result.candidates
+    : [];
+
+
+  const searchText = search.trim().toLowerCase();
+
+
+  const filteredCandidates = candidates.filter((vessel) =>
+    `${vessel.vessel_name || ""} ${vessel.mmsi || ""}`
+      .toLowerCase()
+      .includes(searchText)
+  );
+
+
+  const fresh =
+    !statusLoading &&
+    !statusError &&
+    status?.data_freshness === "recent";
+
+
+  const freshnessLabels = {
+    recent: "RECENT AIS DATA",
+    stale: "SAVED DATA IS STALE",
+    clock_mismatch: "CLOCK MISMATCH",
+    no_data: "NO SAVED AIS DATA",
+  };
+
+
+  const statusText = statusLoading
+    ? "CHECKING SAVED DATA"
+    : statusError
+      ? "STATUS UNAVAILABLE"
+      : freshnessLabels[status?.data_freshness] ||
+        "FRESHNESS UNAVAILABLE";
+
+
+  const limitations = Array.isArray(result?.limitations)
+    ? result.limitations
+    : [];
+
 
   return (
-    <div className="min-h-screen bg-[#020617] text-slate-100">
-      <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute left-0 top-20 h-96 w-96 rounded-full bg-cyan-500/5 blur-3xl" />
-
-        <div className="absolute right-0 top-1/3 h-96 w-96 rounded-full bg-blue-500/5 blur-3xl" />
-      </div>
-
-      <div className="relative space-y-6">
-        {/* Header */}
-        <motion.div
-          initial={{ opacity: 0, y: -15 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end"
-        >
-          <div>
-            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-400">
-              <Ship size={14} />
-              AIS Correlation Engine
+    <main className="min-h-screen space-y-6 bg-[#020617] p-4 text-slate-100 md:p-6">
+      <header className="flex flex-col justify-between gap-4 xl:flex-row">
+        <div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-cyan-400">
+              <Ship size={16} />
+              AIS location and time screening
             </div>
 
-            <h1 className="text-3xl font-bold md:text-4xl">
-              Vessel Attribution
-            </h1>
 
-            <p className="mt-2 max-w-2xl text-sm text-slate-400">
-              Correlate historical AIS traffic with the estimated spill
-              origin and rank vessels by investigation relevance.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 rounded-xl border border-emerald-400/20 bg-emerald-400/5 px-4 py-3">
-            <Radio
-              size={15}
-              className="animate-pulse text-emerald-400"
-            />
-
-            <span className="text-xs font-semibold text-emerald-400">
-              AIS NETWORK CONNECTED
-            </span>
-          </div>
-        </motion.div>
-
-        {/* Origin card */}
-        <motion.div
-          initial={{ opacity: 0, y: 15 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="rounded-3xl border border-cyan-400/10 bg-cyan-400/[0.025] p-5 backdrop-blur-xl"
-        >
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex items-center gap-4">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-400/10 text-cyan-400">
-                <Target size={22} />
-              </div>
-
-              <div>
-                <p className="text-[10px] uppercase tracking-widest text-slate-600">
-                  Probable Spill Origin
-                </p>
-
-                <p className="mt-1 text-lg font-bold">
-                  {originLocation}
-                </p>
-
-                <p className="mt-1 text-xs text-cyan-400">
-                  {originCoords}
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {[
-                ["Time Window", "08–14 hr"],
-                ["Radius", "50 km"],
-                ["Vessels", vesselData.length || "—"],
-                ["Ranked", vesselData.length || "—"],
-              ].map(([label, value]) => (
-                <div
-                  key={label}
-                  className="rounded-xl border border-white/10 bg-black/10 px-4 py-3"
-                >
-                  <p className="text-[9px] uppercase text-slate-600">
-                    {label}
-                  </p>
-
-                  <p className="mt-1 text-sm font-bold text-slate-200">
-                    {value}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </motion.div>
-
-        {/* Stats */}
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {[
-            [
-              "Traffic Analysed",
-              vesselData.length || "—",
-              Ship,
-              "Live investigation",
-            ],
-            [
-              "High Relevance",
-              highRelevanceCount,
-              ShieldAlert,
-              "Priority review",
-            ],
-            [
-              "Trajectory Match",
-              topTrajectory,
-              Route,
-              "Top vessel",
-            ],
-            [
-              "Combined Score",
-              topCombinedScore,
-              CheckCircle2,
-              "Top ranked vessel",
-            ],
-          ].map(([label, value, Icon, sub], index) => (
-            <motion.div
-              key={label}
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.05 }}
-              className="rounded-2xl border border-white/10 bg-white/[0.03] p-5"
+            <button
+              type="button"
+              onClick={() => navigate("/spill-analysis")}
+              className="flex items-center gap-2 rounded-xl border border-white/15 px-4 py-2 text-sm text-slate-200 transition hover:border-cyan-400/40 hover:text-cyan-300"
             >
-              <div className="flex items-center justify-between">
-                <div className="rounded-xl bg-cyan-400/10 p-2.5 text-cyan-400">
-                  <Icon size={18} />
-                </div>
-              </div>
+              <ArrowLeft size={16} />
+              Back to Spill Analysis
+            </button>
+          </div>
 
-              <p className="mt-5 text-2xl font-bold">
-                {value}
-              </p>
 
-              <p className="mt-1 text-xs text-slate-400">
-                {label}
-              </p>
+          <h1 className="mt-3 text-3xl font-bold">
+            Vessel Attribution
+          </h1>
 
-              <p className="mt-1 text-[9px] text-slate-700">
-                {sub}
-              </p>
-            </motion.div>
-          ))}
+
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
+            Search saved vessel positions near an observation.
+            Matches are investigative screening results, not proof
+            that a vessel caused a spill.
+          </p>
         </div>
 
-        {/* Search/filter */}
-        <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4 md:flex-row">
-          <div className="relative flex-1">
-            <Search
-              size={17}
-              className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-600"
-            />
 
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search vessel name, MMSI number or vessel type..."
-              className="h-11 w-full rounded-xl border border-white/10 bg-black/10 pl-11 pr-4 text-sm text-slate-300 outline-none placeholder:text-slate-700 focus:border-cyan-400/40"
-            />
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Filter size={15} className="text-slate-600" />
-
-            <select
-              value={riskFilter}
-              onChange={(e) => setRiskFilter(e.target.value)}
-              className="h-11 rounded-xl border border-white/10 bg-[#07101f] px-4 text-xs text-slate-300 outline-none"
-            >
-              <option>All</option>
-              <option>CRITICAL</option>
-              <option>HIGH</option>
-              <option>MEDIUM</option>
-              <option>LOW</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Loading state */}
-        {loading && (
-          <div className="rounded-3xl border border-cyan-400/10 bg-cyan-400/[0.03] py-16 text-center">
-            <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-cyan-400/20 border-t-cyan-400" />
-
-            <p className="mt-4 text-sm font-semibold text-slate-300">
-              Loading live AIS investigation...
-            </p>
-
-            <p className="mt-1 text-xs text-slate-600">
-              Correlating vessels with the investigation data.
-            </p>
-          </div>
-        )}
-
-        {/* Error state */}
-        {!loading && error && (
-          <div className="rounded-3xl border border-red-400/20 bg-red-400/[0.04] p-5">
-            <div className="flex items-start gap-3">
-              <AlertTriangle
-                size={18}
-                className="mt-0.5 shrink-0 text-red-400"
-              />
-
-              <div>
-                <p className="text-sm font-semibold text-red-300">
-                  Live investigation unavailable
-                </p>
-
-                <p className="mt-1 text-xs text-slate-500">
-                  {error}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Vessel list */}
-        {!loading && !error && (
-          <div className="space-y-3">
-            {filteredVessels.map((vessel, index) => (
-              <motion.div
-                key={vessel.imo}
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.05 }}
-                className="rounded-3xl border border-white/10 bg-white/[0.03] p-5 backdrop-blur-xl transition hover:border-cyan-400/20"
-              >
-                <div className="flex flex-col gap-5 xl:flex-row xl:items-center">
-                  {/* Rank */}
-                  <div className="flex items-center gap-4 xl:w-[300px]">
-                    <div
-                      className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border text-sm font-bold ${
-                        vessel.rank === 1
-                          ? "border-red-400/30 bg-red-400/10 text-red-400"
-                          : "border-white/10 bg-white/[0.03] text-slate-400"
-                      }`}
-                    >
-                      #{vessel.rank}
-                    </div>
-
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="truncate font-semibold text-slate-200">
-                          {vessel.name}
-                        </h3>
-
-                        <span
-                          className={`rounded-full border px-2 py-1 text-[8px] font-bold ${
-                            riskStyles[vessel.risk]
-                          }`}
-                        >
-                          {vessel.risk}
-                        </span>
-                      </div>
-
-                      <div className="mt-1 flex flex-wrap gap-3 text-[10px] text-slate-600">
-                        <span>{vessel.imo}</span>
-                        <span>{vessel.type}</span>
-                        <span>{vessel.flag}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Distance */}
-                  <div className="flex items-center gap-3 xl:w-[150px]">
-                    <div className="rounded-xl bg-cyan-400/10 p-2 text-cyan-400">
-                      <MapPin size={16} />
-                    </div>
-
-                    <div>
-                      <p className="text-[9px] uppercase text-slate-600">
-                        Origin Distance
-                      </p>
-
-                      <p className="mt-1 text-sm font-bold">
-                        {vessel.distance}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Scores */}
-                  <div className="grid flex-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <ScoreBar
-                      label="Proximity"
-                      value={vessel.proximity}
-                    />
-
-                    <ScoreBar
-                      label="Timing"
-                      value={vessel.timing}
-                    />
-
-                    <ScoreBar
-                      label="Correlation"
-                      value={vessel.trajectory}
-                    />
-
-                    <ScoreBar
-                      label="Behaviour Score"
-                      value={vessel.anomaly}
-                      suffix=""
-                    />
-                  </div>
-
-                  {/* Button */}
-                  <button
-                    onClick={() => setSelected(vessel)}
-                    className="flex h-10 items-center justify-center gap-2 rounded-xl border border-white/10 px-4 text-xs font-semibold text-slate-300 transition hover:border-cyan-400/30 hover:bg-cyan-400/10 hover:text-cyan-300"
-                  >
-                    Details
-                    <ChevronRight size={15} />
-                  </button>
-                </div>
-              </motion.div>
-            ))}
-
-            {filteredVessels.length === 0 && (
-              <div className="rounded-3xl border border-dashed border-white/10 py-20 text-center">
-                <Ship
-                  size={30}
-                  className="mx-auto text-slate-700"
-                />
-
-                <p className="mt-4 text-sm font-semibold text-slate-400">
-                  No matching vessels
-                </p>
-
-                <p className="mt-1 text-xs text-slate-700">
-                  Try changing your search or risk filter.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Methodology */}
-        <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-5">
-          <div className="flex items-start gap-3">
-            <Activity
-              size={18}
-              className="mt-0.5 text-cyan-400"
-            />
-
-            <div>
-              <h3 className="text-sm font-semibold">
-                Attribution Methodology
-              </h3>
-
-              <p className="mt-1 max-w-4xl text-xs leading-6 text-slate-600">
-                Vessel relevance is calculated using a multi-factor
-                correlation model combining distance from the estimated
-                origin, temporal compatibility, trajectory similarity and
-                behavioural anomalies. Higher scores indicate stronger
-                investigative relevance and do not independently establish
-                responsibility.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Details modal */}
-      {selected && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-md"
-          onClick={() => setSelected(null)}
-        >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-2xl rounded-3xl border border-white/10 bg-[#07101f] p-6"
+        <section className={`${PANEL} xl:max-w-md`}>
+          <p
+            className={`flex items-center gap-2 text-xs font-semibold ${
+              fresh ? "text-emerald-400" : "text-amber-300"
+            }`}
           >
-            <div className="flex items-start justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Ship size={18} className="text-cyan-400" />
+            <Radio size={15} />
+            {statusText}
+          </p>
 
-                  <span className="text-[10px] uppercase tracking-widest text-cyan-400">
-                    Vessel Profile
-                  </span>
-                </div>
 
-                <h2 className="mt-2 text-2xl font-bold">
-                  {selected.name}
-                </h2>
+          <p className="mt-3 text-xs text-slate-400">
+            Latest receipt:{" "}
+            {formatTime(status?.last_received_at_utc)}
+          </p>
 
-                <p className="mt-1 text-xs text-slate-600">
-                  {selected.imo} • {selected.type}
-                </p>
-              </div>
 
-              <button
-                onClick={() => setSelected(null)}
-                className="rounded-xl border border-white/10 p-2 text-slate-500 hover:text-white"
-              >
-                <X size={18} />
-              </button>
-            </div>
+          <p className="mt-2 text-xs text-slate-500">
+            Saved-data freshness does not verify the collector's
+            WebSocket connection or complete vessel coverage.
+          </p>
 
-            <div className="mt-6 grid gap-3 sm:grid-cols-2">
-              {[
-                ["Flag State", selected.flag],
-                ["Distance", selected.distance],
-                ["Current Speed", selected.speed],
-                ["Heading", selected.heading],
-                ["Last AIS Signal", selected.lastSeen],
-                ["Investigation Rank", `#${selected.rank}`],
-              ].map(([label, value]) => (
-                <div
-                  key={label}
-                  className="rounded-xl border border-white/10 bg-white/[0.03] p-4"
-                >
-                  <p className="text-[9px] uppercase tracking-wider text-slate-600">
-                    {label}
-                  </p>
 
-                  <p className="mt-1 text-sm font-semibold text-slate-200">
-                    {value}
-                  </p>
-                </div>
-              ))}
-            </div>
+          {statusError && (
+            <p className="mt-2 text-xs text-red-300">
+              {statusError}
+            </p>
+          )}
 
-            <div className="mt-5 rounded-2xl border border-cyan-400/10 bg-cyan-400/[0.03] p-5">
-              <div className="flex items-center gap-2">
-                <Route size={16} className="text-cyan-400" />
 
-                <h3 className="text-sm font-semibold">
-                  Correlation Scores
-                </h3>
-              </div>
+          <button
+            type="button"
+            disabled={statusLoading}
+            onClick={loadStatus}
+            className="mt-3 rounded-lg border border-white/15 px-3 py-2 text-xs disabled:opacity-50"
+          >
+            {statusLoading
+              ? "Checking…"
+              : "Check data freshness"}
+          </button>
+        </section>
+      </header>
 
-              <div className="mt-5 space-y-4">
-                <ScoreBar
-                  label="Proximity Match"
-                  value={selected.proximity}
-                />
 
-                <ScoreBar
-                  label="Temporal Match"
-                  value={selected.timing}
-                />
+      <section className="rounded-2xl border border-amber-400/20 bg-amber-400/5 p-4 text-sm leading-6 text-amber-200">
+        This page screens recorded positions against a supplied
+        point and time. It does not run image prediction or
+        calculate drift, predicted trajectories, or responsibility.
+        The ranking uses closest recorded distance; time difference
+        breaks distance ties.
+      </section>
 
-                <ScoreBar
-                  label="Correlation"
-                  value={selected.trajectory}
-                />
 
-                <ScoreBar
-                  label="Behaviour Score"
-                  value={selected.anomaly}
-                  suffix=""
-                />
-              </div>
-            </div>
+      {form.artificialTest && (
+        <section className="rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm font-semibold text-amber-200">
+          ARTIFICIAL TEST METADATA — NOT A VERIFIED SPILL OBSERVATION
+        </section>
+      )}
 
-            <div className="mt-5 flex items-start gap-3 rounded-xl border border-amber-400/10 bg-amber-400/[0.03] p-4">
-              <AlertTriangle
-                size={16}
-                className="mt-0.5 shrink-0 text-amber-400"
-              />
 
-              <p className="text-[10px] leading-5 text-slate-600">
-                This vessel is ranked as an investigative lead based on AIS
-                correlation signals. The ranking is not a determination of
-                responsibility.
-              </p>
-            </div>
-          </motion.div>
+      <section className={PANEL}>
+        <h2 className="text-xl font-semibold">
+          Observation details
+        </h2>
+
+
+        <p className="mt-2 text-xs leading-5 text-slate-400">
+          Incoming observation values are saved and then removed
+          from this URL. Reloading restores saved edits. A new
+          handoff from Spill Analysis replaces these inputs.
+          Screening results are not saved across reloads.
+        </p>
+
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <Field label="Latitude">
+            <input
+              type="number"
+              step="any"
+              min="-90"
+              max="90"
+              placeholder="Latitude"
+              value={form.latitude}
+              disabled={loading}
+              onChange={(event) =>
+                updateField("latitude", event.target.value)
+              }
+              className={INPUT}
+            />
+          </Field>
+
+
+          <Field label="Longitude">
+            <input
+              type="number"
+              step="any"
+              min="-180"
+              max="180"
+              placeholder="Longitude"
+              value={form.longitude}
+              disabled={loading}
+              onChange={(event) =>
+                updateField("longitude", event.target.value)
+              }
+              className={INPUT}
+            />
+          </Field>
+
+
+          <Field label="Observation timestamp with timezone">
+            <input
+              type="text"
+              placeholder="YYYY-MM-DDTHH:mm:ssZ"
+              value={form.observedAt}
+              disabled={loading}
+              onChange={(event) =>
+                updateField("observedAt", event.target.value)
+              }
+              className={INPUT}
+            />
+          </Field>
+
+
+          <Field label="Look-back window in hours">
+            <input
+              type="number"
+              step="any"
+              min="0"
+              max="72"
+              value={form.lookbackHours}
+              disabled={loading}
+              onChange={(event) =>
+                updateField("lookbackHours", event.target.value)
+              }
+              className={INPUT}
+            />
+          </Field>
+
+
+          <Field label="Search radius in kilometres">
+            <input
+              type="number"
+              step="any"
+              min="0"
+              max="100"
+              value={form.radiusKm}
+              disabled={loading}
+              onChange={(event) =>
+                updateField("radiusKm", event.target.value)
+              }
+              className={INPUT}
+            />
+          </Field>
+        </div>
+
+
+        <label className="mt-5 flex items-start gap-3 text-sm text-amber-200">
+          <input
+            type="checkbox"
+            checked={form.artificialTest}
+            disabled={loading}
+            onChange={(event) =>
+              updateField("artificialTest", event.target.checked)
+            }
+            className="mt-1"
+          />
+          This is an artificial test, not a verified spill
+          observation.
+        </label>
+
+
+        <div className="mt-5 flex flex-wrap gap-3">
+          <button
+            type="button"
+            disabled={loading}
+            onClick={runScreening}
+            className="rounded-xl bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 disabled:opacity-50"
+          >
+            {loading ? "Screening…" : "Screen recorded vessels"}
+          </button>
+
+
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => applyForm({ ...TEST_FORM })}
+            className="rounded-xl border border-white/15 px-5 py-3 text-sm disabled:opacity-50"
+          >
+            Load artificial test
+          </button>
+
+
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => applyForm({ ...EMPTY_FORM })}
+            className="rounded-xl border border-white/15 px-5 py-3 text-sm text-slate-400 disabled:opacity-50"
+          >
+            Clear form
+          </button>
+        </div>
+
+
+        {storageError && (
+          <p role="alert" className="mt-4 text-sm text-amber-300">
+            {storageError}
+          </p>
+        )}
+      </section>
+
+
+      {error && (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-2xl border border-red-400/20 bg-red-400/5 p-4 text-sm text-red-300"
+        >
+          <AlertTriangle size={18} className="shrink-0" />
+          <span>{error}</span>
         </div>
       )}
-    </div>
+
+
+      {result && (
+        <>
+          {resultIsTest && (
+            <div className="rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm font-semibold text-amber-200">
+              ARTIFICIAL TEST RESULTS — NOT A REAL SPILL
+              INVESTIGATION
+            </div>
+          )}
+
+
+          <section className={PANEL}>
+            <h2 className="text-lg font-semibold">
+              Screening results
+            </h2>
+
+
+            <p className="mt-2 text-xs text-slate-400">
+              Point: {formatNumber(result.query?.latitude, 6)},{" "}
+              {formatNumber(result.query?.longitude, 6)} · Radius:{" "}
+              {formatNumber(result.query?.radius_km, 2, " km")}
+            </p>
+
+
+            <p className="mt-2 text-xs leading-5 text-slate-400">
+              Window: {formatTime(result.query?.window_start_utc)}
+              {" → "}
+              {formatTime(result.query?.observed_at_utc)}
+            </p>
+
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-3">
+              {[
+                ["Positions in window", result.positions_in_time_window],
+                ["Vessels in window", result.vessels_in_time_window],
+                ["Matching vessels", result.total_candidates],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl bg-white/5 p-4">
+                  <p className="text-xs text-slate-400">{label}</p>
+                  <p className="mt-2 text-2xl font-semibold">
+                    {value ?? "Unavailable"}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+
+            <p className="mt-4 text-xs text-slate-400">
+              {result.ranking_method}
+            </p>
+
+
+            {result.total_candidates > candidates.length && (
+              <p className="mt-2 text-xs text-amber-300">
+                Returned {candidates.length} of{" "}
+                {result.total_candidates} matches.
+              </p>
+            )}
+          </section>
+
+
+          {result.status === "no_matching_time_data" ? (
+            <section className={PANEL}>
+              <h3 className="font-semibold text-amber-300">
+                No matching AIS history
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-slate-400">
+                No accepted stored positions fall within this time
+                window. Screening is unavailable for this query.
+                This does not prove that no vessels were present.
+              </p>
+            </section>
+          ) : result.status === "no_positions_within_radius" ? (
+            <section className={PANEL}>
+              <h3 className="font-semibold">
+                No recorded positions within the selected radius
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-slate-400">
+                Positions exist in the time window, but none meet
+                the radius filter. The collection may be incomplete.
+              </p>
+            </section>
+          ) : (
+            <section className="space-y-3">
+              <label className="flex items-center gap-3 rounded-xl border border-white/10 px-4">
+                <Search size={17} className="shrink-0 text-slate-400" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Filter returned names or MMSIs"
+                  className="w-full bg-transparent py-4 text-sm outline-none"
+                />
+              </label>
+
+
+              {filteredCandidates.map((vessel) => {
+                const point = vessel.closest_recorded_position || {};
+
+
+                const details = [
+                  [
+                    "Computed separation",
+                    formatNumber(vessel.distance_km, 3, " km"),
+                  ],
+                  [
+                    "Before observation",
+                    formatNumber(
+                      vessel.time_difference_minutes,
+                      1,
+                      " min"
+                    ),
+                  ],
+                  [
+                    "Positions in window",
+                    vessel.positions_in_time_window,
+                  ],
+                  [
+                    "Positions within radius",
+                    vessel.positions_within_radius,
+                  ],
+                  [
+                    "Recorded speed",
+                    formatNumber(point.speed_knots, 1, " kn"),
+                  ],
+                  [
+                    "Recorded heading",
+                    formatNumber(point.heading_degrees, 0, "°"),
+                  ],
+                  ["Latitude", formatNumber(point.latitude, 6)],
+                  ["Longitude", formatNumber(point.longitude, 6)],
+                ];
+
+
+                const reasons = Array.isArray(vessel.reasons)
+                  ? vessel.reasons
+                  : [];
+
+
+                return (
+                  <article key={vessel.mmsi} className={PANEL}>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-lg font-semibold">
+                          #{vessel.rank}{" "}
+                          {vessel.vessel_name || "Unknown Vessel"}
+                        </h3>
+                        <p className="mt-1 text-xs text-slate-400">
+                          MMSI {vessel.mmsi}
+                          {vessel.call_sign
+                            ? ` · Call sign ${vessel.call_sign}`
+                            : ""}
+                        </p>
+                      </div>
+
+
+                      <span className="rounded-full border border-cyan-400/20 px-3 py-1 text-xs text-cyan-300">
+                        Proximity/time match only
+                      </span>
+                    </div>
+
+
+                    <dl className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      {details.map(([label, value]) => (
+                        <div key={label}>
+                          <dt className="text-xs text-slate-500">
+                            {label}
+                          </dt>
+                          <dd className="mt-1 text-sm">
+                            {value ?? "Unavailable"}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+
+
+                    <p className="mt-4 text-xs text-slate-400">
+                      Closest report:{" "}
+                      {formatTime(point.provider_message_time_utc)}
+                    </p>
+
+
+                    <p className="mt-2 text-xs leading-5 text-slate-500">
+                      Computed separation does not establish position
+                      accuracy. Gaps between messages are unobserved.
+                      No responsibility determination has been made.
+                    </p>
+
+
+                    <details className="mt-4 text-xs text-slate-400">
+                      <summary className="cursor-pointer text-cyan-300">
+                        Supporting evidence
+                      </summary>
+
+
+                      <ul className="mt-3 list-disc space-y-2 pl-5">
+                        {reasons.map((reason, index) => (
+                          <li key={index}>{reason}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  </article>
+                );
+              })}
+
+
+              {filteredCandidates.length === 0 && (
+                <div className={PANEL}>
+                  {candidates.length === 0
+                    ? "The API returned no candidate records."
+                    : "No returned vessels match the text filter."}
+                </div>
+              )}
+            </section>
+          )}
+
+
+          <section className={PANEL}>
+            <h2 className="font-semibold">Limitations</h2>
+
+
+            <ul className="mt-3 list-disc space-y-2 pl-5 text-xs leading-5 text-slate-400">
+              {limitations.map((limitation, index) => (
+                <li key={index}>{limitation}</li>
+              ))}
+            </ul>
+          </section>
+        </>
+      )}
+    </main>
   );
 }
